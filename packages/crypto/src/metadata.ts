@@ -26,16 +26,6 @@ export const META_IV_LENGTH = 12;
 export const METADATA_PAD_BLOCK = 1024;
 
 /**
- * Caps on what a sender may put into metadata, which an inbox shows and computes with. They sit
- * far above anything the clients produce (a path is at most 4096 bytes, an upload holds a few
- * dozen files), so no real upload is affected, while a crafted blob cannot carry a megabyte of
- * name or a hundred thousand entries into the UI.
- */
-export const METADATA_MAX_NAME_LENGTH = 4096;
-export const METADATA_MAX_FILES = 10_000;
-export const METADATA_MAX_MIME_LENGTH = 256;
-
-/**
  * Whether a value is a byte count: a non-negative safe integer. JSON reads 1e999 as Infinity
  * and 1.5 as a float, and a hand-built blob can carry either.
  */
@@ -226,17 +216,11 @@ function validateMetadata(data: unknown): FileMetadata {
     if (typeof obj.name !== "string" || obj.name.length === 0) {
       throw new Error("Invalid metadata: missing or empty file name");
     }
-    if (obj.name.length > METADATA_MAX_NAME_LENGTH) {
-      throw new Error("Invalid metadata: file name too long");
-    }
     if (!isByteCount(obj.size)) {
       throw new Error("Invalid metadata: invalid file size");
     }
     if (typeof obj.mimeType !== "string") {
       throw new Error("Invalid metadata: missing MIME type");
-    }
-    if (obj.mimeType.length > METADATA_MAX_MIME_LENGTH) {
-      throw new Error("Invalid metadata: MIME type too long");
     }
     return {
       type: "single",
@@ -251,9 +235,6 @@ function validateMetadata(data: unknown): FileMetadata {
     if (!Array.isArray(obj.files)) {
       throw new Error("Invalid metadata: files must be an array");
     }
-    if (obj.files.length > METADATA_MAX_FILES) {
-      throw new Error("Invalid metadata: too many file entries");
-    }
     const files: Array<{ name: string; size: number }> = [];
     for (const file of obj.files) {
       if (typeof file !== "object" || file === null) {
@@ -262,9 +243,6 @@ function validateMetadata(data: unknown): FileMetadata {
       const f = file as Record<string, unknown>;
       if (typeof f.name !== "string" || f.name.length === 0) {
         throw new Error("Invalid metadata: file entry missing name");
-      }
-      if (f.name.length > METADATA_MAX_NAME_LENGTH) {
-        throw new Error("Invalid metadata: file entry name too long");
       }
       if (!isByteCount(f.size)) {
         throw new Error("Invalid metadata: file entry invalid size");

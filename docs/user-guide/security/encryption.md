@@ -62,7 +62,7 @@ Two tokens are derived for server-side authorization:
 
 Both tokens are sent to the server during upload. The server stores them for later verification using constant-time comparison.
 
-The owner token is derived from the secret in the link, so whoever has the link can also delete the share, with or without its password.
+The owner token is derived from the secret in the link, so whoever has the link can also delete the share through the API, with or without its password. The web interface offers deletion only to the browser that created the share.
 
 ## Streaming Encryption (ECE)
 
