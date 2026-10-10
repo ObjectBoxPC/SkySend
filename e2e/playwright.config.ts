@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,15 +15,22 @@ type Target = TargetOptions & {
   origin: string;
   /** The recording proxy of scripts/serve.mjs, with the server one port above it. */
   proxyPort: number;
-  caddy?: boolean;
+  /** The reverse proxy in front, which serves the origin with TLS and HTTP/2. */
+  proxy?: "caddy" | "nginx";
   env?: Record<string, string>;
   testIgnore?: string[];
 };
 
+// Notes take neither upload transport and run behind one proxy only, and the guard test needs
+// the WebSocket route, which a server without FILE_UPLOAD_WS does not have.
+const NOTES = "**/notes.spec.ts";
+const GUARD = "**/guard.spec.ts";
+
 /**
  * The setups the tests run against. Each is a server of its own with its own data directory,
- * behind the recording proxy. The Caddy ones put a reverse proxy with TLS and HTTP/2 in front,
- * set up like docs/user-guide/self-hosting/reverse-proxy.md, see proxies/Caddyfile.
+ * behind the recording proxy. The others put a reverse proxy with TLS and HTTP/2 in front, set
+ * up like docs/user-guide/self-hosting/reverse-proxy.md: Caddy through proxies/Caddyfile, Nginx
+ * with the example read straight out of that page by scripts/nginx.mjs.
  */
 const TARGETS: Target[] = [
   {
@@ -38,7 +46,7 @@ const TARGETS: Target[] = [
     proxyPort: 3270,
     protocol: "h2",
     uploadTransport: "ws",
-    caddy: true,
+    proxy: "caddy",
     env: { TRUST_PROXY: "true" },
   },
   {
@@ -48,22 +56,49 @@ const TARGETS: Target[] = [
     proxyPort: 3370,
     protocol: "h2",
     uploadTransport: "http",
-    caddy: true,
+    proxy: "caddy",
     env: { TRUST_PROXY: "true", FILE_UPLOAD_WS: "false" },
-    // Notes take neither upload transport, and the guard test needs the WebSocket route.
-    testIgnore: ["**/notes.spec.ts", "**/guard.spec.ts"],
+    testIgnore: [NOTES, GUARD],
+  },
+  {
+    name: "nginx",
+    origin: "https://localhost:3445",
+    proxyPort: 3470,
+    protocol: "h2",
+    uploadTransport: "ws",
+    proxy: "nginx",
+    env: { TRUST_PROXY: "true" },
+    testIgnore: [NOTES],
+  },
+  {
+    name: "nginx-chunks",
+    origin: "https://localhost:3446",
+    proxyPort: 3570,
+    protocol: "h2",
+    uploadTransport: "http",
+    proxy: "nginx",
+    env: { TRUST_PROXY: "true", FILE_UPLOAD_WS: "false" },
+    testIgnore: [NOTES, GUARD],
   },
 ];
 
-const caddyInstalled = existsSync(CADDY);
-if (!caddyInstalled && CI) throw new Error(`Caddy is missing, run pnpm test:e2e:install`);
-if (!caddyInstalled && !process.env.TEST_WORKER_INDEX) {
-  console.warn(
-    "Caddy is not installed, the tests behind it are left out. Run pnpm test:e2e:install.",
-  );
+/** Whether the tools a reverse proxy needs are there, and how to get them if not. */
+const proxies = {
+  caddy: { ready: existsSync(CADDY), missing: "Caddy is not installed, run pnpm test:e2e:install" },
+  // The Nginx image runs on the host network, which Docker Desktop on a Mac has to allow first.
+  nginx: {
+    ready: spawnSync("docker", ["info"], { stdio: "ignore", timeout: 10_000 }).status === 0,
+    missing: "Docker is not available, the Nginx image cannot run",
+  },
+};
+for (const { ready, missing } of Object.values(proxies)) {
+  if (ready) continue;
+  if (CI) throw new Error(missing);
+  if (!process.env.TEST_WORKER_INDEX) console.warn(`${missing}. The tests behind it are left out.`);
 }
-const targets = TARGETS.filter((target) => !target.caddy || caddyInstalled);
-const [caddyWs, caddyChunks] = TARGETS.filter((target) => target.caddy);
+const targets = TARGETS.filter((target) => !target.proxy || proxies[target.proxy].ready);
+const behind = (proxy: Target["proxy"]) => targets.filter((target) => target.proxy === proxy);
+const [caddyWs, caddyChunks] = behind("caddy");
 
 // Each engine takes its own download path, see apps/web/src/lib/download-tiers.ts.
 const engines = [
@@ -137,7 +172,8 @@ export default defineConfig<TargetOptions>({
         DATA_DIR: join(tmpdir(), `skysend-e2e-${target.name}`),
       },
     })),
-    ...(caddyInstalled && caddyWs && caddyChunks
+    // The proxies start after the servers, whose health they answer for.
+    ...(caddyWs && caddyChunks
       ? [
           {
             command: `${CADDY} run --config proxies/Caddyfile --adapter caddyfile`,
@@ -145,7 +181,7 @@ export default defineConfig<TargetOptions>({
             ignoreHTTPSErrors: true,
             reuseExistingServer: !CI,
             env: {
-              E2E_CADDY_STORAGE: join(tmpdir(), "skysend-e2e-caddy"),
+              E2E_CADDY_STORAGE: join(tmpdir(), "skysend-e2e-proxy-caddy"),
               E2E_CADDY_WS_PORT: new URL(caddyWs.origin).port,
               E2E_CADDY_WS_UPSTREAM: String(caddyWs.proxyPort),
               E2E_CADDY_CHUNKS_PORT: new URL(caddyChunks.origin).port,
@@ -154,5 +190,16 @@ export default defineConfig<TargetOptions>({
           },
         ]
       : []),
+    ...behind("nginx").map((target) => ({
+      command: `node scripts/nginx.mjs ${target.name} ${new URL(target.origin).port} ${target.proxyPort}`,
+      url: `${target.origin}/api/health`,
+      ignoreHTTPSErrors: true,
+      reuseExistingServer: !CI,
+      // The first start pulls the image.
+      timeout: 180_000,
+      // Playwright kills a web server outright unless told otherwise, and the container would
+      // outlive the killed script. SIGTERM lets the script remove it.
+      gracefulShutdown: { signal: "SIGTERM" as const, timeout: 10_000 },
+    })),
   ],
 });

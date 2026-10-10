@@ -5,7 +5,8 @@
 
 ### 🧪 Tests
 
-- **infra**: End-to-end tests share files and notes and send to file requests in Chromium, Firefox and WebKit, directly and behind Caddy with HTTPS and HTTP/2, then open them on the other side. They check that keys, filenames, passwords and contents never reach the server and that uploads and downloads take the path they should.
+- **infra**: End-to-end tests share files and notes and send to file requests in Chromium, Firefox and WebKit, directly and behind Caddy and Nginx with HTTPS and HTTP/2, then open them on the other side. They check that keys, filenames, passwords and contents never reach the server and that uploads and downloads take the path they should.
+- **infra**: The Nginx example of the reverse proxy guide runs in the end-to-end tests as written, so a change that breaks it fails its pull request.
 
 ### 🔧 CI/CD
 

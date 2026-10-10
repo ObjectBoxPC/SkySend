@@ -101,15 +101,22 @@ The UI is a web page on `http://localhost:9323`. It needs a secure context for i
 
 The tests run against the production build, where the server serves the SPA and the API from one origin, the way an instance does. `e2e/scripts/serve.mjs` starts a server on an empty data directory in the system temp folder and puts a small recording proxy in front of it, which passes everything on to the server one port above.
 
-The tests run against three setups, each with a server of its own. The chunks setup leaves out the note tests, since notes take neither upload transport, and the guard test, which needs the WebSocket.
+The tests run against five setups, each with a server of its own. Notes take neither upload transport, so their tests run directly and behind Caddy only. The chunk setups also leave out the guard test, which needs the WebSocket.
 
 | Setup | Projects | Browser to SkySend | Uploads |
 | --- | --- | --- | --- |
 | direct | `chromium`, `firefox`, `webkit` | HTTP/1.1 to `http://localhost:3170` | WebSocket |
 | behind Caddy | `chromium-caddy`, ... | HTTPS and HTTP/2 to `https://localhost:3443` | WebSocket, upgraded through Caddy |
 | behind Caddy, chunks | `chromium-caddy-chunks`, ... | HTTPS and HTTP/2 to `https://localhost:3444` | Chunks over HTTP/2, `FILE_UPLOAD_WS=false` |
+| behind Nginx | `chromium-nginx`, ... | HTTPS and HTTP/2 to `https://localhost:3445` | WebSocket, upgraded through Nginx |
+| behind Nginx, chunks | `chromium-nginx-chunks`, ... | HTTPS and HTTP/2 to `https://localhost:3446` | Chunks over HTTP/2, `FILE_UPLOAD_WS=false` |
 
-Uploads that stalled behind reverse proxies, like the HTTP/2 problems fixed in v2.2.2 and v2.2.3, only show up when a proxy speaks HTTP/2 to the browser. Caddy is set up like [Reverse Proxy](/user-guide/self-hosting/reverse-proxy) recommends, with nothing but the `reverse_proxy` line per site, see `e2e/proxies/Caddyfile`. It signs with a certificate of its own CA, which the browsers are told to accept. `pnpm test:e2e:install` downloads Caddy into `e2e/.tools/` and checks it against a pinned SHA-512. Without it, a local run leaves out the setups behind Caddy and says so, CI fails instead.
+Uploads that stalled behind reverse proxies, like the HTTP/2 problems fixed in v2.2.2 and v2.2.3, only show up when a proxy speaks HTTP/2 to the browser. Both proxies are set up the way [Reverse Proxy](/user-guide/self-hosting/reverse-proxy) tells operators to, with a certificate of their own that the browsers are told to accept:
+
+- **Caddy** gets nothing but the `reverse_proxy` line per site, see `e2e/proxies/Caddyfile`. `pnpm test:e2e:install` downloads it into `e2e/.tools/` and checks it against a pinned SHA-512.
+- **Nginx** runs the example of the docs page itself. `e2e/scripts/nginx.mjs` reads the `nginx` block out of `reverse-proxy.md` on every start and only replaces the port, the certificate and the upstream, so a change to that example is tested by the next run. It runs the official Nginx image, pinned by digest, on the host network, which takes Docker, and on a Mac the host networking of Docker Desktop.
+
+Without Caddy or Docker, a local run leaves out the setups behind them and says so. CI fails instead.
 
 Three checks run wherever a test shares, uploads or downloads:
 

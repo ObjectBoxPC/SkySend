@@ -154,6 +154,13 @@ proxy.on("upgrade", (req, socket, firstBytes) => {
   upstream.on("error", close);
 });
 
+// The timeouts of apps/server/src/index.ts, so the proxy in front meets the same server it would
+// meet without this one. Node's 5 second keep-alive would let Caddy or Nginx reuse a connection
+// just as it closes, the failure v2.11.3 fixed in the server.
+proxy.headersTimeout = 60_000;
+proxy.requestTimeout = 0;
+proxy.keepAliveTimeout = 120_000;
+
 proxy.listen(proxyPort, process.env.HOST, () => {
   console.log(`[e2e] Recording proxy on ${process.env.BASE_URL}`);
 });
