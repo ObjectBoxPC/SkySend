@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineConfig, devices } from "@playwright/test";
+import { SNAPSHOTS, snapshotVersions } from "./tests/support/compat.js";
 import type { TargetOptions } from "./tests/support/fixtures.js";
 
 const CI = !!process.env.CI;
@@ -17,6 +18,8 @@ type Target = TargetOptions & {
   proxyPort: number;
   /** The reverse proxy in front, which serves the origin with TLS and HTTP/2. */
   proxy?: "caddy" | "nginx";
+  /** A release whose snapshot the server starts on, which only compat.spec.ts tests. */
+  snapshot?: string;
   env?: Record<string, string>;
   testIgnore?: string[];
 };
@@ -25,6 +28,7 @@ type Target = TargetOptions & {
 // the WebSocket route, which a server without FILE_UPLOAD_WS does not have.
 const NOTES = "**/notes.spec.ts";
 const GUARD = "**/guard.spec.ts";
+const COMPAT = "**/compat.spec.ts";
 
 /**
  * The setups the tests run against. Each is a server of its own with its own data directory,
@@ -80,6 +84,16 @@ const TARGETS: Target[] = [
     env: { TRUST_PROXY: "true", FILE_UPLOAD_WS: "false" },
     testIgnore: [NOTES, GUARD],
   },
+  // One server per released version with a snapshot, which opens the links of that version.
+  ...snapshotVersions().map((version, index): Target => ({
+    name: `compat-${version}`,
+    origin: `http://localhost:${3670 + index * 100}`,
+    proxyPort: 3670 + index * 100,
+    protocol: "http/1.1",
+    uploadTransport: "ws",
+    snapshot: version,
+    env: { SNAPSHOT: join(SNAPSHOTS, version, "data.tar.gz") },
+  })),
 ];
 
 /** Whether the tools a reverse proxy needs are there, and how to get them if not. */
@@ -141,7 +155,13 @@ export default defineConfig<TargetOptions>({
       const https = target.origin.startsWith("https:");
       return {
         name: target.name === "direct" ? engine : `${engine}-${target.name}`,
-        testIgnore: target.testIgnore,
+        // A snapshot server runs the tests of its own release and nothing else.
+        ...(target.snapshot
+          ? {
+              testMatch: COMPAT,
+              grep: new RegExp(`\\[${target.snapshot.replaceAll(".", "\\.")}\\]`),
+            }
+          : { testIgnore: [...(target.testIgnore ?? []), COMPAT] }),
         use: {
           ...device,
           baseURL: target.origin,

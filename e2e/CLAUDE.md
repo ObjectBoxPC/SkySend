@@ -39,6 +39,17 @@ The UI is served as a page instead of a window, so it works on a machine without
 - The app has no test ids. Select by role and the English label (`locale: "en-US"`). The option pills open a `radiogroup`, not a `group`.
 - A WebSocket the server rejects drops whatever the browser had not sent yet in WebKit. Send one message per socket when a test needs frames on the wire.
 
+## Snapshots of releases
+
+`compat/snapshots/<version>/` holds `data.tar.gz` (the `data/` and `uploads/` of a server of that release, `data/tmp` left out) and `links.json` (what was shared). Every snapshot becomes a target `compat-<version>` on port 3670 plus 100 per version, whose projects run only `compat.spec.ts` and pick their release's tests by the `[version]` in the title through `grep`.
+
+- `compat/seed.mjs <version>` (`pnpm --filter @skysend/e2e compat:seed`) runs the published `ghcr.io/skyfay/skysend:<version>` with Docker as the current user, shares through its UI with `seed/<version>.spec.ts` or `seed/release.spec.ts`, stops it with SIGTERM so SQLite checkpoints, and packs the result. Make a snapshot once, right after its release, and commit it. Seeding again replaces every key, so never reseed an existing version without a reason.
+- `release.spec.ts` uses the current helpers, which fit the release just made. A release with an older UI needs its own seed. Version-specific seeds may break later as the helpers move on, which is fine, they ran once.
+- The seed server gets high limits (1000 downloads, unlimited views, 1000 uploads and 100 downloads per request, the most v3.0.1 accepts), since all three engines and their retries share one copy of the snapshot. Inbox and file tests find rows by name, never by count, because the open-request test adds uploads.
+- `scripts/serve.mjs` restores a snapshot when `SNAPSHOT` is set: unpacks it, points `DATA_DIR` and `UPLOADS_DIR` at it, and sets every `expires_at` and `closes_at` column of every table a year ahead (seconds or milliseconds, by size) before the server starts and migrates. That works on any schema, so a new snapshot needs no code there. `storage_path` holds `<id>.bin`, relative, so the uploads can move.
+- `links.json` keeps path and fragment only, the origin differs per run. File contents come from `compatBytes(file)`, a SHA-256 stream of the file's seed.
+- A snapshot made right after its release has the same migrations as the current server. Migrations only get exercised once the schema moves on, or by a snapshot of an older release.
+
 ## Checking a check
 
-A new assertion is only worth something if it can fail. Break the thing it guards once and put it back: move `apps/web/dist/download-sw.js` away, which must fail the tier assertion, or give a Caddy site a `request_body { max_size 1MB }`, which must fail the uploads of `caddy-chunks`.
+A new assertion is only worth something if it can fail. Break the thing it guards once and put it back: move `apps/web/dist/download-sw.js` away, which must fail the tier assertion, or give a Caddy site a `request_body { max_size 1MB }`, which must fail the uploads of `caddy-chunks`, or let `extendExpiries` in `scripts/serve.mjs` move the dates a minute into the past, which must fail every compat test.

@@ -6,9 +6,16 @@
 // The recording is what the zero-knowledge check of every test searches. It sits in front of
 // the server because Playwright does not see all traffic: no Service Worker requests in Firefox,
 // no WebSocket frames in WebKit. What reaches this proxy is what reaches the server.
+//
+// With SNAPSHOT set to the data.tar.gz of an old release, the server starts on a copy of that
+// release's data instead, see tests/support/compat.ts. It migrates the database like it would
+// after an update.
+import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync } from "node:fs";
 import http from "node:http";
+import { createRequire } from "node:module";
 import net from "node:net";
+import { join } from "node:path";
 
 const dataDir = process.env.DATA_DIR;
 const proxyPort = Number(process.env.PROXY_PORT);
@@ -18,6 +25,43 @@ if (!dataDir || !proxyPort || !serverPort)
 
 rmSync(dataDir, { recursive: true, force: true });
 mkdirSync(dataDir, { recursive: true });
+
+if (process.env.SNAPSHOT) {
+  execFileSync("tar", [
+    "--extract",
+    "--gzip",
+    "--file",
+    process.env.SNAPSHOT,
+    "--directory",
+    dataDir,
+  ]);
+  process.env.DATA_DIR = join(dataDir, "data");
+  process.env.UPLOADS_DIR = join(dataDir, "uploads");
+  extendExpiries(join(dataDir, "data", "db", "skysend.db"));
+}
+
+/**
+ * Moves every expiry of a snapshot a year ahead, since the shares of a snapshot made months ago
+ * have run out. Works on the schema of any release: every `expires_at` and `closes_at` column,
+ * in seconds or in milliseconds as the column holds them.
+ */
+function extendExpiries(database) {
+  const Database = createRequire(import.meta.resolve("../../apps/server/package.json"))(
+    "better-sqlite3",
+  );
+  const db = new Database(database);
+  const seconds = Math.floor(Date.now() / 1000) + 365 * 24 * 60 * 60;
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all();
+  for (const { name: table } of tables) {
+    for (const { name: column } of db.prepare(`PRAGMA table_info("${table}")`).all()) {
+      if (column !== "expires_at" && column !== "closes_at") continue;
+      db.prepare(
+        `UPDATE "${table}" SET "${column}" = CASE WHEN "${column}" > 100000000000 THEN ? ELSE ? END`,
+      ).run(seconds * 1000, seconds);
+    }
+  }
+  db.close();
+}
 
 await import("../../apps/server/dist/index.js");
 

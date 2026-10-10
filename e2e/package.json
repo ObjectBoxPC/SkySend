@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "test:e2e": "playwright test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "compat:seed": "node compat/seed.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.0",

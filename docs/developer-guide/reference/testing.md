@@ -131,8 +131,26 @@ Three checks run wherever a test shares, uploads or downloads:
 | `requests.spec.ts` | Files into a request and out of the inbox, files and a note as one submission, an inbox with a password |
 | `guard.spec.ts` | The recording of the proxy sees headers, bodies and WebSocket frames |
 | `transport.spec.ts` | The page arrives over HTTP/1.1 or HTTP/2 as its setup promises, and an upload takes its transport |
+| `compat.spec.ts` | Every link of an older release still opens after an update, see below |
 
 The **E2E Tests** job in `.github/workflows/validate.yml` runs them on every pull request. When it fails, the report with screenshots, videos and traces is attached to the run as the `e2e-report` artifact. A trace opens with `pnpm --filter @skysend/e2e exec playwright show-trace <trace.zip>`.
+
+### Links from older releases
+
+An update must not break the links an instance handed out before it. `compat.spec.ts` checks that for every release with a snapshot in `e2e/compat/snapshots/<version>/`:
+
+- `data.tar.gz` holds the data directory and the uploads of a server of that release, right after it shared files, notes and file requests through its own UI.
+- `links.json` lists what was shared: the links with their keys, the passwords, the names, and the seeds the file contents are made from, so the snapshot does not have to keep the original files.
+
+A run starts the current server on a copy of each snapshot, moves every expiry a year ahead and lets the server migrate the database the way it does after an update. Then every link is opened in all three browsers. Files are downloaded and compared byte for byte, notes and inboxes are opened, and a request made before the update takes a new upload.
+
+A snapshot is made once and committed. After a release, run:
+
+```bash
+pnpm --filter @skysend/e2e compat:seed v3.0.2
+```
+
+It starts the published image of that version with Docker, shares through its UI with `e2e/compat/seed/release.spec.ts`, and writes the snapshot. A release whose UI the current test helpers no longer fit gets a seed of its own, `e2e/compat/seed/<version>.spec.ts`, written against that UI.
 
 ### Writing an end-to-end test
 

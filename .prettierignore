@@ -6,3 +6,4 @@ node_modules
 data
 *.db
 pnpm-lock.yaml
+e2e/compat/snapshots
