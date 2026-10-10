@@ -1,4 +1,10 @@
-import { test as base, expect, type APIRequestContext, type Page } from "@playwright/test";
+import {
+  test as base,
+  expect,
+  type APIRequestContext,
+  type BrowserContext,
+  type Page,
+} from "@playwright/test";
 import { decodeInboxFragment, decodeUploadFragment } from "@skysend/crypto";
 
 type Needle = { name: string; bytes: Buffer };
@@ -75,15 +81,51 @@ export class Guard {
   }
 }
 
+/** What the setup a project runs against promises, set per project in playwright.config.ts. */
+export type TargetOptions = {
+  /** The protocol between the browser and the first server, as `nextHopProtocol` names it. */
+  protocol: "http/1.1" | "h2";
+  /** How uploads travel, as the upload worker logs it. */
+  uploadTransport: "ws" | "http";
+};
+
 type Fixtures = {
   guard: Guard;
   /** A page in a browser of its own, with nothing of the sender in it: the recipient. */
   openRecipient: () => Promise<Page>;
   /** The download path this engine takes, see apps/web/src/lib/download-tiers.ts. */
   expectedTier: string;
+  /**
+   * The transports the upload worker logged in every browser of the test. After the test each
+   * one has to be the transport of the target, so a broken WebSocket cannot hide behind the
+   * chunked fallback.
+   */
+  uploadTransports: string[];
 };
 
-export const test = base.extend<Fixtures>({
+function recordTransports(context: BrowserContext, transports: string[]) {
+  context.on("console", (message) => {
+    const transport = /\[upload-worker\] transport=(\w+)/.exec(message.text());
+    if (transport) transports.push(transport[1]!);
+  });
+}
+
+export const test = base.extend<Fixtures & TargetOptions>({
+  protocol: ["http/1.1", { option: true }],
+  uploadTransport: ["ws", { option: true }],
+
+  uploadTransports: [
+    async ({ context, uploadTransport }, use) => {
+      const transports: string[] = [];
+      recordTransports(context, transports);
+      await use(transports);
+      for (const transport of transports) {
+        expect(transport, "uploads take the transport of the target").toBe(uploadTransport);
+      }
+    },
+    { auto: true },
+  ],
+
   guard: [
     async ({ request }, use) => {
       const guard = new Guard();
@@ -95,10 +137,11 @@ export const test = base.extend<Fixtures>({
     { auto: true },
   ],
 
-  openRecipient: async ({ browser }, use) => {
-    const contexts: Array<Awaited<ReturnType<typeof browser.newContext>>> = [];
+  openRecipient: async ({ browser, uploadTransports }, use) => {
+    const contexts: BrowserContext[] = [];
     await use(async () => {
       const context = await browser.newContext();
+      recordTransports(context, uploadTransports);
       contexts.push(context);
       return context.newPage();
     });

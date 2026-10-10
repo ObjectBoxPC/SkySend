@@ -82,10 +82,10 @@ The server tests use a shared `helpers.ts` file that provides:
 The end-to-end tests in `e2e/` drive the real app in Chromium, Firefox and WebKit, the way a person would: share a file or a note, open the link in a second browser that knows nothing of the sender, download or read it and compare it with what was shared.
 
 ```bash
-# Once: the three browsers and, on Linux, the system libraries they need (asks for sudo)
+# Once: the three browsers, on Linux the system libraries they need (asks for sudo), and Caddy
 pnpm test:e2e:install
 
-# Build the server and the SPA, then run every test in all three browsers
+# Build the server and the SPA, then run every test in all three browsers and every setup
 pnpm test:e2e
 
 # Build, then pick tests and watch them run, step by step, at http://localhost:9323
@@ -95,16 +95,27 @@ pnpm test:e2e:ui
 pnpm --filter @skysend/e2e exec playwright show-report
 ```
 
-The UI is a web page on `http://localhost:9323`. It needs a secure context for its Service Worker, so open it through `localhost`, not through the IP address or hostname of the machine. On a machine without a display, like a VM, use a browser on that machine or forward the port. The UI starts with the Chromium project only, the Projects filter at the top of the test list adds Firefox and WebKit.
+The UI is a web page on `http://localhost:9323`. It needs a secure context for its Service Worker, so open it through `localhost`, not through the IP address or hostname of the machine. On a machine without a display, like a VM, use a browser on that machine or forward the port. The UI starts with the `chromium` project only, the Projects filter at the top of the test list adds the others.
 
 ### How a run works
 
-The tests run against the production build, where the server serves the SPA and the API from one origin, the way an instance does. `e2e/scripts/serve.mjs` starts the server on an empty data directory in the system temp folder and puts a small recording proxy in front of it. The browsers talk to the proxy on port 3170, which passes everything on to the server on port 3171.
+The tests run against the production build, where the server serves the SPA and the API from one origin, the way an instance does. `e2e/scripts/serve.mjs` starts a server on an empty data directory in the system temp folder and puts a small recording proxy in front of it, which passes everything on to the server one port above.
 
-Two checks run in every test that downloads a file or opens a note:
+The tests run against three setups, each with a server of its own. The chunks setup leaves out the note tests, since notes take neither upload transport, and the guard test, which needs the WebSocket.
+
+| Setup | Projects | Browser to SkySend | Uploads |
+| --- | --- | --- | --- |
+| direct | `chromium`, `firefox`, `webkit` | HTTP/1.1 to `http://localhost:3170` | WebSocket |
+| behind Caddy | `chromium-caddy`, ... | HTTPS and HTTP/2 to `https://localhost:3443` | WebSocket, upgraded through Caddy |
+| behind Caddy, chunks | `chromium-caddy-chunks`, ... | HTTPS and HTTP/2 to `https://localhost:3444` | Chunks over HTTP/2, `FILE_UPLOAD_WS=false` |
+
+Uploads that stalled behind reverse proxies, like the HTTP/2 problems fixed in v2.2.2 and v2.2.3, only show up when a proxy speaks HTTP/2 to the browser. Caddy is set up like [Reverse Proxy](/user-guide/self-hosting/reverse-proxy) recommends, with nothing but the `reverse_proxy` line per site, see `e2e/proxies/Caddyfile`. It signs with a certificate of its own CA, which the browsers are told to accept. `pnpm test:e2e:install` downloads Caddy into `e2e/.tools/` and checks it against a pinned SHA-512. Without it, a local run leaves out the setups behind Caddy and says so, CI fails instead.
+
+Three checks run wherever a test shares, uploads or downloads:
 
 - **Nothing secret reaches the server.** Each test names what only the sender and the recipient may know: the key from the link fragment, the filenames, passwords, note text and a stretch of each file. After the test, everything the proxy recorded is searched for them, in URLs, headers, request bodies and WebSocket frames. The search runs on the server side because Playwright does not see all traffic in every browser. `guard.spec.ts` makes sure the recording sees what a leak would look like.
 - **The download takes the path meant for the browser.** Chromium and Firefox download through the Service Worker (tier 1), WebKit through the Blob fallback (tier 3), see [Download Modes](/developer-guide/download-modes). A tier that fails falls through to the next and the download still arrives, so the tests check the tier the app logged as well.
+- **Uploads take the transport of the setup.** A broken WebSocket would fall back to chunks without a word, so every upload has to log the transport its setup offers.
 
 | File | Tests |
 | --- | --- |
@@ -112,6 +123,7 @@ Two checks run in every test that downloads a file or opens a note:
 | `notes.spec.ts` | A note of text, password and code blocks, a password, burn after reading |
 | `requests.spec.ts` | Files into a request and out of the inbox, files and a note as one submission, an inbox with a password |
 | `guard.spec.ts` | The recording of the proxy sees headers, bodies and WebSocket frames |
+| `transport.spec.ts` | The page arrives over HTTP/1.1 or HTTP/2 as its setup promises, and an upload takes its transport |
 
 The **E2E Tests** job in `.github/workflows/validate.yml` runs them on every pull request. When it fails, the report with screenshots, videos and traces is attached to the run as the `e2e-report` artifact. A trace opens with `pnpm --filter @skysend/e2e exec playwright show-trace <trace.zip>`.
 

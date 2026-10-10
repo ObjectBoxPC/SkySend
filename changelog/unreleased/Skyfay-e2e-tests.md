@@ -1,10 +1,11 @@
 ### 📝 Documentation
 
 - **docs**: The testing guide explains how to run and write the end-to-end tests.
+- **docs**: Troubleshooting explains why Chrome asks where to save every download on an instance whose certificate it does not trust.
 
 ### 🧪 Tests
 
-- **infra**: End-to-end tests share files and notes and send to file requests in Chromium, Firefox and WebKit, then open them on the other side. They check that keys, filenames, passwords and contents never reach the server and that each browser downloads the way it should.
+- **infra**: End-to-end tests share files and notes and send to file requests in Chromium, Firefox and WebKit, directly and behind Caddy with HTTPS and HTTP/2, then open them on the other side. They check that keys, filenames, passwords and contents never reach the server and that uploads and downloads take the path they should.
 
 ### 🔧 CI/CD
 

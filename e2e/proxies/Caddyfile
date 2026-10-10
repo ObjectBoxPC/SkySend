@@ -1,0 +1,32 @@
+# The Caddy setup of docs/user-guide/self-hosting/reverse-proxy.md, as close as a local test gets:
+# every site is the bare `reverse_proxy` line of the docs. The global options only keep Caddy
+# local: a certificate from its own CA instead of Let's Encrypt, nothing written outside the temp
+# folder, nothing reachable from another machine. The ports come from playwright.config.ts.
+{
+	admin off
+	persist_config off
+	local_certs
+	skip_install_trust
+	# The redirect from HTTP would need port 80, which takes root and which no test opens.
+	auto_https disable_redirects
+	storage file_system {$E2E_CADDY_STORAGE}
+	default_bind 127.0.0.1
+	log {
+		level ERROR
+	}
+	servers {
+		# A browser only moves to HTTP/3 after a first response, so with it on, the protocol a
+		# test runs over would depend on timing.
+		protocols h1 h2
+	}
+}
+
+# Uploads over WebSocket, upgraded through Caddy.
+https://localhost:{$E2E_CADDY_WS_PORT} {
+	reverse_proxy 127.0.0.1:{$E2E_CADDY_WS_UPSTREAM}
+}
+
+# Uploads in chunks, over HTTP/2 between the browser and Caddy.
+https://localhost:{$E2E_CADDY_CHUNKS_PORT} {
+	reverse_proxy 127.0.0.1:{$E2E_CADDY_CHUNKS_UPSTREAM}
+}
