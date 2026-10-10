@@ -27,6 +27,7 @@ Claude Code loads the nearest `CLAUDE.md` when you touch files in a directory. R
 | Docs site and the changelog | [docs/CLAUDE.md](docs/CLAUDE.md) |
 | Marketing website (skysend.app) | [website/CLAUDE.md](website/CLAUDE.md) |
 | Cloudflare Workers | [workers/CLAUDE.md](workers/CLAUDE.md) |
+| End-to-end tests (Playwright) | [e2e/CLAUDE.md](e2e/CLAUDE.md) |
 
 ## Non-negotiable rules
 
@@ -52,6 +53,7 @@ packages/note-format/ What a note holds before encryption. Imported by web and c
 docs/            VitePress docs site (docs.skysend.app).
 website/         Next.js marketing site (skysend.app).
 workers/         Cloudflare Workers: instance registry and abuse reports.
+e2e/             Playwright tests of the production build in Chromium, Firefox and WebKit.
 ```
 
 Data flow for an upload:
@@ -81,6 +83,8 @@ pnpm lint                 # eslint . (lint:fix to autofix)
 pnpm typecheck            # Builds crypto + server first, then tsc across the tree
 pnpm test                 # Recursive vitest run
 pnpm test:coverage        # Coverage for server, web, crypto, client
+pnpm test:e2e             # Build, then the Playwright tests in Chromium, Firefox and WebKit (test:e2e:install first)
+pnpm test:e2e:ui          # Build, then the Playwright UI at http://localhost:9323
 pnpm format               # prettier --write .
 ```
 
