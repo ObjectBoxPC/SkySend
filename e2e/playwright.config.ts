@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineConfig, devices, type PlaywrightTestConfig } from "@playwright/test";
@@ -30,6 +30,8 @@ type Target = Omit<TargetOptions, "storage"> & {
   tag?: string;
   /** The engines this setup runs in, all three when left out. */
   engines?: Engine[];
+  /** The large-file setup, which runs alone and only with E2E_LARGE=1. */
+  large?: boolean;
 };
 
 // What goes over the wire, which is what a reverse proxy or an upload transport can break.
@@ -45,6 +47,7 @@ const GUARD = "**/guard.spec.ts";
 // Specs of their own setups, each test titled with the [tag] of its setup.
 const COMPAT = "**/compat.spec.ts";
 const CONFIG = "**/config.spec.ts";
+const LARGE = "**/large.spec.ts";
 // The engines behind a reverse proxy. WebKit on Linux speaks HTTP/2 and TLS through libsoup,
 // a network stack no Safari has, so behind a proxy it would only test that. Chromium and
 // Firefox ship the network stacks people use, and WebKit keeps its own path in the direct
@@ -135,6 +138,26 @@ const TARGETS: Target[] = [
     env: { TRUST_PROXY: "true", FILE_UPLOAD_WS: "false" },
     testMatch: WIRE,
     engines: PROXY_ENGINES,
+  },
+  {
+    // A file of 5 GiB up through Nginx with TLS and HTTP/2 and down through the Service Worker,
+    // past the 2 GiB and 4 GiB marks where a size overflows 32 bits. WebKit would assemble the
+    // download in memory, which a file this size does not fit. The proxy records headers only.
+    name: "large",
+    origin: "https://localhost:3447",
+    proxyPort: 3590,
+    protocol: "h2",
+    uploadTransport: "ws",
+    proxy: "nginx",
+    env: {
+      TRUST_PROXY: "true",
+      FILE_MAX_SIZE: "8GB",
+      RECORD_BODIES: "false",
+      WIPE_ON_EXIT: "true",
+    },
+    testMatch: [LARGE],
+    engines: ["chromium"],
+    large: true,
   },
   variant("forced-passwords", 3610, {
     FORCE_FILE_PASSWORD: "true",
@@ -265,7 +288,19 @@ function shifted(target: Target): Target {
   };
 }
 
-const selected = TARGETS.map(shifted).filter((target) => enginesOf(target).length > 0);
+/**
+ * E2E_LARGE=1 (`pnpm test:e2e:large`) runs the large-file setup and nothing else, the other way
+ * round every other run leaves it out. Its server data and its download go to e2e/.large-files
+ * and the source file to test-results, all on the disk of the checkout, about 11 GB at the peak.
+ * The temp folder lives in memory on some systems, where gigabytes do not fit.
+ */
+const LARGE_RUN = !!process.env.E2E_LARGE;
+const LARGE_FILES = join(import.meta.dirname, ".large-files");
+const LARGE_DOWNLOADS = join(LARGE_FILES, `downloads${SUFFIX}`);
+if (LARGE_RUN) mkdirSync(LARGE_DOWNLOADS, { recursive: true });
+const selected = TARGETS.map(shifted).filter(
+  (target) => enginesOf(target).length > 0 && !!target.large === LARGE_RUN,
+);
 for (const [name, tool] of Object.entries(tools)) {
   if (tool.ready || !selected.some((target) => needs(target) === name)) continue;
   if (CI) throw new Error(tool.missing);
@@ -329,19 +364,22 @@ export default defineConfig<TargetOptions>({
           name: target.name === "direct" ? engine : `${engine}-${target.name}`,
           ...(target.testMatch
             ? { testMatch: target.testMatch }
-            : { testIgnore: [COMPAT, CONFIG] }),
+            : { testIgnore: [COMPAT, CONFIG, LARGE] }),
           ...(target.tag ? { grep: new RegExp(`\\[${target.tag.replaceAll(".", "\\.")}\\]`) } : {}),
           use: {
             ...device,
             baseURL: target.origin,
             // The OIDC provider signs its own certificate as well.
             ignoreHTTPSErrors: https || target.service?.kind === "oidc",
-            // Chromium refuses a Service Worker from an origin with a certificate error unless
-            // the whole browser ignores such errors, which a trusted certificate makes moot on a
-            // real instance.
-            ...(https && engine === "chromium"
-              ? { launchOptions: { args: ["--ignore-certificate-errors"] } }
-              : {}),
+            launchOptions: {
+              // Chromium refuses a Service Worker from an origin with a certificate error unless
+              // the whole browser ignores such errors, which a trusted certificate makes moot on
+              // a real instance.
+              ...(https && engine === "chromium" ? { args: ["--ignore-certificate-errors"] } : {}),
+              ...(target.large ? { downloadsPath: LARGE_DOWNLOADS } : {}),
+            },
+            // A trace or a video of gigabytes going through would only fill the disk.
+            ...(target.large ? { trace: "off" as const, video: "off" as const } : {}),
             protocol: target.protocol,
             uploadTransport: target.uploadTransport,
             storage: target.service?.kind === "s3" ? "s3" : "filesystem",
@@ -389,8 +427,15 @@ export default defineConfig<TargetOptions>({
         PROXY_PORT: String(target.proxyPort),
         PORT: String(target.proxyPort + 1),
         BASE_URL: target.origin,
-        DATA_DIR: join(tmpdir(), `skysend-e2e-${target.name}${SUFFIX}`),
+        DATA_DIR: target.large
+          ? join(LARGE_FILES, `server${SUFFIX}`)
+          : join(tmpdir(), `skysend-e2e-${target.name}${SUFFIX}`),
       },
+      // A killed server cannot remove its data, see WIPE_ON_EXIT in scripts/serve.mjs. The server
+      // itself gives up after 10 seconds of waiting for connections.
+      ...(target.env?.WIPE_ON_EXIT
+        ? { gracefulShutdown: { signal: "SIGTERM" as const, timeout: 15_000 } }
+        : {}),
     })),
     // The proxies start after the servers, whose health they answer for.
     ...(caddyWs && caddyChunks

@@ -6,6 +6,7 @@ Playwright drives the production build in Chromium, Firefox and WebKit. Package 
 pnpm test:e2e:install                                  # Browsers, apt libraries on Linux (sudo), Caddy into e2e/.tools
 pnpm test:e2e                                          # Builds crypto, note-format, server and web, then runs everything
 pnpm test:e2e:ui                                       # Builds, then the Playwright UI at http://localhost:9323
+pnpm test:e2e:large                                    # Builds, then only large.spec.ts with a file of 5 GiB
 ```
 
 The UI is served as a page instead of a window, so it works on a machine without a display. Its Service Worker needs a secure context: it only renders through `localhost`, an IP address or hostname shows a black page. It starts with the Chromium project selected.
@@ -52,6 +53,12 @@ The UI is served as a page instead of a window, so it works on a machine without
 - A label can collide with a block of the same name: a template field called "Password" shares its name with the Password block's region. `sendToRequest` fills fields by their textbox for that reason, and test data uses distinct labels.
 - `rowMenu(row, item)` opens "More actions" of a row in My Links, an inbox or the template list, `confirm(page, action)` presses the button of the dialog that asks first.
 - Cancelling a download is not covered: nothing slows a download down reliably, and in Firefox the Service Worker fetches past Playwright.
+
+## Crafted notes and large files
+
+- `crafted-note.spec.ts` sends markup that would run code, load something or restyle the page through every block type and checks the rendered `main` itself: no `script`, `iframe`, `object`, `embed`, `style`, `link`, `meta`, `base`, `math` or SVG other than the app's own lucide icons, no `on…` attribute, no `javascript:`, `data:` or `vbscript:` URL. Checking only that nothing ran is not enough, since the CSP blocks most of it even when the sanitizer fails. `apps/web/tests/components/NoteBlocks.test.tsx` covers the breadth of payloads in jsdom, this one the parsers of the real engines. Both caught a raw HTML hole planted in the plain text block.
+- `large.spec.ts` runs only with `E2E_LARGE=1`, which `pnpm test:e2e:large` sets and which runs it alone, in the `large` setup: Nginx with TLS and HTTP/2, Chromium only, `FILE_MAX_SIZE=8GB`, no trace and no video, and `RECORD_BODIES=false` on the recording proxy. `scanServer` refuses a needle marked `inBody`, like `guard.content`, when the setup records no bodies, so a content check never passes for not having looked. Keys and names are still checked in URLs and headers.
+- The file comes from xorshift32 per block of a MiB, hashed while it is written, and goes before the download, so the peak is the ciphertext on the server and the download, about 11 GB. The test checks for 2.2 times the size of free disk before it writes, so a full disk fails in a second with a message instead of halfway. Nothing of it goes to the temp folder, which is a tmpfs in memory on skydev and other Linux systems: the source lands in `test-results/`, the server's `DATA_DIR` and Chromium's `downloadsPath` in `e2e/.large-files/`, which is ignored. Measured on skydev: 10 GB at the peak on the disk, 1 MiB in `/tmp`. With `WIPE_ON_EXIT=true` the server of the setup gets SIGTERM instead of a kill and removes its data directory when it exits, and `download.delete()` removes the download, so a finished run leaves only empty folders. `E2E_LARGE_SIZE` (bytes) tries a smaller file first. The CI job **E2E Large File** removes unused toolchains in the background for room and never uploads the `.bin` with a failed report.
 
 ## Snapshots of releases
 

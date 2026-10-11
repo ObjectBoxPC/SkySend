@@ -7,7 +7,8 @@ import {
 } from "@playwright/test";
 import { decodeInboxFragment, decodeUploadFragment } from "@skysend/crypto";
 
-type Needle = { name: string; bytes: Buffer };
+/** `inBody` marks a needle that only a request body or a frame can carry, like file content. */
+type Needle = { name: string; bytes: Buffer; inBody?: boolean };
 
 /** The fragment of a link, which holds its key. */
 function fragmentOf(link: string) {
@@ -24,7 +25,15 @@ export async function scanServer(request: APIRequestContext, needles: Needle[]) 
     },
   });
   expect(response.ok(), "the recording proxy answers").toBe(true);
-  const { hits } = (await response.json()) as { hits: Array<{ name: string; where: string }> };
+  const { hits, bodies } = (await response.json()) as {
+    hits: Array<{ name: string; where: string }>;
+    bodies: boolean;
+  };
+  // A setup that records no bodies cannot have found content, which must not read as a pass.
+  const blind = needles.filter((needle) => needle.inBody && !bodies);
+  if (blind.length > 0) {
+    throw new Error(`This setup records no bodies, so ${blind[0]!.name} cannot be checked`);
+  }
   return hits;
 }
 
@@ -77,7 +86,11 @@ export class Guard {
     // A few bytes turn up anywhere by chance, so a short file is no proof either way.
     if (data.length < 32) return;
     const start = Math.floor((data.length - Math.min(data.length, 64)) / 2);
-    this.needles.push({ name: `content of ${name}`, bytes: data.subarray(start, start + 64) });
+    this.needles.push({
+      name: `content of ${name}`,
+      bytes: data.subarray(start, start + 64),
+      inBody: true,
+    });
   }
 }
 

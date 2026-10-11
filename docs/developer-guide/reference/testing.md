@@ -91,6 +91,9 @@ pnpm test:e2e
 # Build, then pick tests and watch them run, step by step, at http://localhost:9323
 pnpm test:e2e:ui
 
+# Build, then send a file of 5 GiB up and down, see below. Needs about 11 GB of free disk.
+pnpm test:e2e:large
+
 # The report of the last run, with screenshots, videos and traces of failed tests
 pnpm --filter @skysend/e2e exec playwright show-report
 ```
@@ -145,12 +148,27 @@ Three checks run wherever a test shares, uploads or downloads:
 | `templates.spec.ts` | A template saved from the form starts a request, a sealed templates link moves one to another browser |
 | `mobile.spec.ts` | Sharing through the sheets of a phone screen, and no page wider than the screen |
 | `config.spec.ts` | Forced passwords, a single enabled service, a cancelled upload, sharing behind an OIDC login |
+| `crafted-note.spec.ts` | A note full of markup that would run, load or restyle shows inert in every engine, checked in the rendered page |
+| `large.spec.ts` | A file of 5 GiB up and down byte for byte, in a job of its own, see below |
 | `cli.spec.ts` | The CLI and the browser open each other's shares, with a password both ways, and a note made in the CLI |
 | `guard.spec.ts` | The recording of the proxy sees headers, bodies and WebSocket frames |
 | `transport.spec.ts` | The page arrives over HTTP/1.1 or HTTP/2 as its setup promises, and an upload takes its transport |
 | `compat.spec.ts` | Every link of an older release still opens after an update, see below |
 
 The **E2E Tests** jobs in `.github/workflows/validate.yml` run them on pull requests, one job per browser. A pull request into `dev` that changes nothing they build, run or read skips them, like one that only touches the website, the Workers or other docs. The **Changes** job decides that from the changed files in a few seconds. Pull requests into `main`, the release and a run started by hand always run them. `E2E_BROWSER` picks the engine, and a run then starts only the servers, proxies and containers that engine's projects need, so the Firefox job never pulls the S3 store. The same works locally, like `E2E_BROWSER=webkit pnpm test:e2e`, or with a list like `chromium,webkit`. When a job fails, its report with screenshots, videos and traces is attached to the run as the `e2e-report-<browser>` artifact. A trace opens with `pnpm --filter @skysend/e2e exec playwright show-trace <trace.zip>`.
+
+### A file of 5 GiB
+
+Sizes overflow where they pass 2 GiB and 4 GiB, which no other test reaches. `large.spec.ts` writes a file of 5 GiB for the run, in which every block of a MiB differs so a swapped, repeated or lost block shows, sends it up through Nginx with TLS and HTTP/2, downloads it through the Service Worker of Chromium and compares the SHA-256. It runs alone, in the **E2E Large File** job beside the others, and the log of the run notes how fast each step went. WebKit is left out, since it assembles a download in memory, which a file this size does not fit, and the recording proxy keeps headers only, since no memory holds the bodies.
+
+```bash
+pnpm test:e2e:large
+
+# A smaller file to try the setup, in bytes
+E2E_LARGE_SIZE=314572800 pnpm test:e2e:large
+```
+
+`pnpm test:e2e` leaves it out. The run needs about 11 GB of free disk, since the server holds the ciphertext while the download arrives beside it, and checks that before it writes anything. It keeps everything on the disk of the checkout, the source in `e2e/test-results/` and the server data and the download in `e2e/.large-files/`, never in the temp folder, which some systems keep in memory. A finished run leaves none of it behind.
 
 ### Links from older releases
 

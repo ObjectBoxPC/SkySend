@@ -25,6 +25,11 @@ if (!dataDir || !proxyPort || !serverPort)
 
 rmSync(dataDir, { recursive: true, force: true });
 mkdirSync(dataDir, { recursive: true });
+// The large-file setup leaves gigabytes of ciphertext behind, which a finished run should not
+// keep in the temp folder until the next one. The server exits on SIGTERM.
+if (process.env.WIPE_ON_EXIT === "true") {
+  process.on("exit", () => rmSync(dataDir, { recursive: true, force: true }));
+}
 
 if (process.env.SNAPSHOT) {
   execFileSync("tar", [
@@ -67,6 +72,12 @@ await import("../../apps/server/dist/index.js");
 
 /** What reached the server: a label to name it and the bytes that were sent. */
 const recorded = [];
+/**
+ * With RECORD_BODIES=false only request lines and headers are kept, no bodies and no WebSocket
+ * frames. The large-file setup sends gigabytes, which no memory holds. A key or a name in a URL
+ * or a header still shows, and a search for content says that it could not look.
+ */
+const recordBodies = process.env.RECORD_BODIES !== "false";
 /** A runaway test should fail loudly instead of filling the memory of the machine. */
 const MAX_RECORDED_BYTES = 1024 ** 3;
 let recordedBytes = 0;
@@ -101,7 +112,7 @@ function scan(req, res) {
       }
     }
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ hits }));
+    res.end(JSON.stringify({ hits, bodies: recordBodies }));
   });
 }
 
@@ -166,7 +177,7 @@ const proxy = http.createServer((req, res) => {
     if (!res.headersSent) res.writeHead(502);
     res.end();
   });
-  req.on("data", (chunk) => body.push(chunk));
+  if (recordBodies) req.on("data", (chunk) => body.push(chunk));
   req.on("end", () => {
     record(label, Buffer.from(head(req)));
     if (body.length > 0) record(`${label} body`, Buffer.concat(body));
@@ -183,10 +194,10 @@ proxy.on("upgrade", (req, socket, firstBytes) => {
   const upstream = net.connect(serverPort, "127.0.0.1", () => {
     upstream.write(handshake);
     if (firstBytes.length > 0) {
-      recordFrames(firstBytes);
+      if (recordBodies) recordFrames(firstBytes);
       upstream.write(firstBytes);
     }
-    socket.on("data", recordFrames);
+    if (recordBodies) socket.on("data", recordFrames);
     socket.pipe(upstream);
     upstream.pipe(socket);
   });

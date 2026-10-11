@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "test:e2e": "playwright test",
+    "test:e2e:large": "E2E_LARGE=1 playwright test",
     "typecheck": "tsc --noEmit",
     "compat:seed": "node compat/seed.mjs"
   },

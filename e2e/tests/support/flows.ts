@@ -44,9 +44,9 @@ export async function setPassword(page: Page, password: string) {
 }
 
 /** A link the app shows once it is ready, like "Share this link" of a finished share. */
-export async function readLink(page: Page, label: string) {
+export async function readLink(page: Page, label: string, timeout = 30_000) {
   const link = page.getByLabel(label, { exact: true });
-  await expect(link).toBeVisible({ timeout: 30_000 });
+  await expect(link).toBeVisible({ timeout });
   return (await link.textContent()) ?? "";
 }
 
@@ -71,9 +71,9 @@ export async function shareFiles(
 }
 
 export type NoteBlockInput =
-  | { type: "Text"; text: string }
+  | { type: "Text"; text: string; markdown?: boolean }
   | { type: "Password"; value: string }
-  | { type: "Code"; code: string };
+  | { type: "Code"; code: string; title?: string };
 
 export async function shareNote(
   page: Page,
@@ -87,11 +87,21 @@ export async function shareNote(
     if (index === 0) await page.getByRole("button", { name: new RegExp(`^${block.type}`) }).click();
     else await page.getByRole("button", { name: block.type, exact: true }).click();
     const editor = page.getByRole("region", { name: block.type }).last();
-    if (block.type === "Text") await editor.getByRole("textbox", { name: "Text" }).fill(block.text);
+    if (block.type === "Text") {
+      if (block.markdown) {
+        await editor
+          .getByRole("radiogroup", { name: "Format" })
+          .getByRole("radio", { name: "Markdown" })
+          .click();
+      }
+      await editor.getByRole("textbox", { name: "Text" }).fill(block.text);
+    }
     if (block.type === "Password")
       await editor.getByPlaceholder("Enter password...").fill(block.value);
-    if (block.type === "Code")
+    if (block.type === "Code") {
+      if (block.title) await editor.getByPlaceholder(/^Filename/).fill(block.title);
       await editor.getByRole("textbox", { name: "Code", exact: true }).fill(block.code);
+    }
   }
   if (options.expiry) await pickExpiry(page, options.expiry);
   if (options.views) {

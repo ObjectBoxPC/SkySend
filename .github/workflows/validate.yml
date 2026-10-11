@@ -197,6 +197,46 @@ jobs:
             e2e/test-results/
           retention-days: 7
 
+  # A file of 5 GiB up through Nginx with TLS and HTTP/2 and down through the Service Worker of
+  # Chromium, beside the other E2E jobs. See e2e/tests/large.spec.ts.
+  e2e-large:
+    name: E2E Large File
+    needs: changes
+    if: needs.changes.outputs.e2e == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      # The test needs about 11 GB of disk at its peak. Toolchains this job never uses go in the
+      # background, which makes room while the rest installs.
+      - run: sudo nohup rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup > /dev/null 2>&1 &
+
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: nohup node e2e/scripts/images.mjs nginx > "$RUNNER_TEMP/images.log" 2>&1 &
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @skysend/e2e exec playwright install --with-deps chromium
+      - run: df -h /
+      - run: pnpm test:e2e:large
+
+      - name: Upload report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-report-large
+          # Never the file itself, which a test that failed early leaves behind.
+          path: |
+            e2e/playwright-report/
+            e2e/test-results/
+            !e2e/test-results/**/*.bin
+          retention-days: 7
+
   docs-build:
     name: Docs Build
     runs-on: ubuntu-latest
