@@ -1,5 +1,5 @@
 import { unzipSync } from "fflate";
-import { expect, test } from "./support/fixtures.js";
+import { expect, scanServer, test } from "./support/fixtures.js";
 import {
   downloadFile,
   randomFile,
@@ -8,6 +8,39 @@ import {
   unlock,
   watchTiers,
 } from "./support/flows.js";
+
+test("a file of several chunks arrives byte for byte", async ({
+  page,
+  request,
+  openRecipient,
+  guard,
+  expectedTier,
+  uploadTransport,
+}) => {
+  // Four chunks of 10 MiB over HTTP with three in flight at once, where uploads stalled behind
+  // HTTP/2 proxies in v2.2.3, or a long run of WebSocket frames past its backpressure mark.
+  const file = randomFile(32 * 1024 * 1024 + 4321);
+  guard.text(file.name);
+  guard.content(file.name, file.buffer);
+
+  const link = await shareFiles(page, [file]);
+  guard.secretOf(link);
+  if (uploadTransport === "http") {
+    const id = new URL(link).pathname.split("/").pop();
+    const fourth = { name: "fourth chunk", bytes: Buffer.from(`/api/upload/${id}/chunk?index=3`) };
+    const hits = await scanServer(request, [fourth]);
+    expect(hits.map((hit) => hit.name)).toContain("fourth chunk");
+  }
+
+  const recipient = await openRecipient();
+  const tiers = watchTiers(recipient);
+  await recipient.goto(link);
+  const received = await downloadFile(recipient);
+
+  expect(received.name).toBe(file.name);
+  expect(received.data.equals(file.buffer)).toBe(true);
+  expect(tiers).toEqual([expectedTier]);
+});
 
 test("a file arrives byte for byte", async ({ page, openRecipient, guard, expectedTier }) => {
   // Many encryption records and WebSocket frames, with a short one at the end.

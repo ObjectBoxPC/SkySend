@@ -24,12 +24,17 @@ export function randomText(label: string) {
 }
 
 /** Opens the options of a pill like "1 download" and picks one of them. */
-async function pick(page: Page, pill: RegExp, question: string, option: string) {
+export async function pick(page: Page, pill: RegExp, question: string, option: string) {
   await page.getByRole("button", { name: pill }).click();
   await page
     .getByRole("radiogroup", { name: question })
     .getByRole("radio", { name: option, exact: true })
     .click();
+}
+
+/** Picks how long a file or note link works, by the label of its option, like "5s". */
+async function pickExpiry(page: Page, expiry: string) {
+  await pick(page, /^Expires after/, "How long should the link work?", expiry);
 }
 
 /** Switches the password of a share or a request on and types it. */
@@ -52,10 +57,11 @@ async function shareLink(page: Page) {
 export async function shareFiles(
   page: Page,
   files: SharedFile[],
-  options: { downloads?: number; password?: string } = {},
+  options: { downloads?: number; password?: string; expiry?: string } = {},
 ) {
   await page.goto("/");
   await page.locator('input[type="file"]:not([webkitdirectory])').setInputFiles(files);
+  if (options.expiry) await pickExpiry(page, options.expiry);
   if (options.downloads) {
     await pick(page, /\d+ downloads?$/, "How many downloads?", String(options.downloads));
   }
@@ -72,7 +78,7 @@ export type NoteBlockInput =
 export async function shareNote(
   page: Page,
   blocks: NoteBlockInput[],
-  options: { views?: "1"; password?: string } = {},
+  options: { views?: "1"; password?: string; expiry?: string } = {},
 ) {
   await page.goto("/");
   await page.getByRole("tab", { name: /^Note/ }).click();
@@ -87,6 +93,7 @@ export async function shareNote(
     if (block.type === "Code")
       await editor.getByRole("textbox", { name: "Code", exact: true }).fill(block.code);
   }
+  if (options.expiry) await pickExpiry(page, options.expiry);
   if (options.views) {
     await pick(
       page,

@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { expect, type Locator, type Page } from "@playwright/test";
-import { readLink, setPassword, unlock, type SharedFile } from "./flows.js";
+import { pick, readLink, setPassword, unlock, type SharedFile } from "./flows.js";
 
 export type RequestAsk = "Files" | "Note" | "Both";
 
@@ -10,7 +10,14 @@ export type RequestAsk = "Files" | "Note" | "Both";
  */
 export async function createRequest(
   page: Page,
-  options: { asks?: RequestAsk; title?: string; field?: string; password?: string } = {},
+  options: {
+    asks?: RequestAsk;
+    title?: string;
+    field?: string;
+    password?: string;
+    /** How long the request stays open, by the label of its option, like "5s". */
+    expiry?: string;
+  } = {},
 ) {
   await page.goto("/requests");
   if (options.asks && options.asks !== "Files") {
@@ -20,6 +27,9 @@ export async function createRequest(
   if (options.field) {
     await page.getByRole("button", { name: "Password", exact: true }).click();
     await page.getByPlaceholder("Field 1, for example Password").fill(options.field);
+  }
+  if (options.expiry) {
+    await pick(page, /^Open for/, "How long is the request open?", options.expiry);
   }
   if (options.password) await setPassword(page, options.password);
   await page.getByRole("button", { name: "Create request" }).click();

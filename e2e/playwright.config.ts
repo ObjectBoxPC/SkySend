@@ -29,6 +29,14 @@ type Target = TargetOptions & {
 const NOTES = "**/notes.spec.ts";
 const GUARD = "**/guard.spec.ts";
 const COMPAT = "**/compat.spec.ts";
+// Expiry is the server's own clock, which no proxy changes.
+const EXPIRY = "**/expiry.spec.ts";
+/** Expiries of 5 seconds next to the defaults, for expiry.spec.ts. The defaults stay as they are. */
+const SHORT_EXPIRY = {
+  FILE_EXPIRE_OPTIONS_SEC: "5,300,3600,86400,604800",
+  NOTE_EXPIRE_OPTIONS_SEC: "5,300,3600,86400,604800",
+  FILE_REQUEST_EXPIRE_OPTIONS_SEC: "5,86400,259200,604800",
+};
 
 /**
  * The setups the tests run against. Each is a server of its own with its own data directory,
@@ -43,6 +51,7 @@ const TARGETS: Target[] = [
     proxyPort: 3170,
     protocol: "http/1.1",
     uploadTransport: "ws",
+    env: SHORT_EXPIRY,
   },
   {
     name: "caddy",
@@ -52,6 +61,7 @@ const TARGETS: Target[] = [
     uploadTransport: "ws",
     proxy: "caddy",
     env: { TRUST_PROXY: "true" },
+    testIgnore: [EXPIRY],
   },
   {
     // Chunks over HTTP/2 is where uploads stalled behind proxies before, in v2.2.2 and v2.2.3.
@@ -62,7 +72,7 @@ const TARGETS: Target[] = [
     uploadTransport: "http",
     proxy: "caddy",
     env: { TRUST_PROXY: "true", FILE_UPLOAD_WS: "false" },
-    testIgnore: [NOTES, GUARD],
+    testIgnore: [NOTES, GUARD, EXPIRY],
   },
   {
     name: "nginx",
@@ -72,7 +82,7 @@ const TARGETS: Target[] = [
     uploadTransport: "ws",
     proxy: "nginx",
     env: { TRUST_PROXY: "true" },
-    testIgnore: [NOTES],
+    testIgnore: [NOTES, EXPIRY],
   },
   {
     name: "nginx-chunks",
@@ -82,7 +92,7 @@ const TARGETS: Target[] = [
     uploadTransport: "http",
     proxy: "nginx",
     env: { TRUST_PROXY: "true", FILE_UPLOAD_WS: "false" },
-    testIgnore: [NOTES, GUARD],
+    testIgnore: [NOTES, GUARD, EXPIRY],
   },
   // One server per released version with a snapshot, which opens the links of that version.
   ...snapshotVersions().map((version, index): Target => ({
@@ -120,6 +130,10 @@ const engines = [
   ["firefox", devices["Desktop Firefox"]],
   ["webkit", devices["Desktop Safari"]],
 ] as const;
+
+// No web server is ever reused. One left over from an earlier run, like a UI mode that is still
+// open, would serve its old configuration, and the tests would pass or fail against that. A
+// taken port fails the run instead, with the port in the message.
 
 /** Every test comes from the same address, so the limits per address are out of the way. */
 const serverEnv = {
@@ -182,7 +196,7 @@ export default defineConfig<TargetOptions>({
     ...targets.map((target) => ({
       command: "node scripts/serve.mjs",
       url: `http://127.0.0.1:${target.proxyPort}/api/health`,
-      reuseExistingServer: !CI,
+      reuseExistingServer: false,
       env: {
         ...serverEnv,
         ...target.env,
@@ -199,7 +213,7 @@ export default defineConfig<TargetOptions>({
             command: `${CADDY} run --config proxies/Caddyfile --adapter caddyfile`,
             url: `${caddyWs.origin}/api/health`,
             ignoreHTTPSErrors: true,
-            reuseExistingServer: !CI,
+            reuseExistingServer: false,
             env: {
               E2E_CADDY_STORAGE: join(tmpdir(), "skysend-e2e-proxy-caddy"),
               E2E_CADDY_WS_PORT: new URL(caddyWs.origin).port,
@@ -214,7 +228,7 @@ export default defineConfig<TargetOptions>({
       command: `node scripts/nginx.mjs ${target.name} ${new URL(target.origin).port} ${target.proxyPort}`,
       url: `${target.origin}/api/health`,
       ignoreHTTPSErrors: true,
-      reuseExistingServer: !CI,
+      reuseExistingServer: false,
       // The first start pulls the image.
       timeout: 180_000,
       // Playwright kills a web server outright unless told otherwise, and the container would
