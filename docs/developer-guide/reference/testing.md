@@ -101,7 +101,7 @@ The UI is a web page on `http://localhost:9323`. It needs a secure context for i
 
 The tests run against the production build, where the server serves the SPA and the API from one origin, the way an instance does. `e2e/scripts/serve.mjs` starts a server on an empty data directory in the system temp folder and puts a small recording proxy in front of it, which passes everything on to the server one port above.
 
-The tests run against five setups, each with a server of its own. Notes take neither upload transport, so their tests run directly and behind Caddy only. The chunk setups also leave out the guard test, which needs the WebSocket.
+Each setup is a server of its own. The direct one runs every test of the app in all three browsers. The setups behind a reverse proxy run what goes over the wire: files, file requests, links and transports, plus the notes behind Caddy and the guard wherever there is a WebSocket.
 
 | Setup | Projects | Browser to SkySend | Uploads |
 | --- | --- | --- | --- |
@@ -110,6 +110,15 @@ The tests run against five setups, each with a server of its own. Notes take nei
 | behind Caddy, chunks | `chromium-caddy-chunks`, ... | HTTPS and HTTP/2 to `https://localhost:3444` | Chunks over HTTP/2, `FILE_UPLOAD_WS=false` |
 | behind Nginx | `chromium-nginx`, ... | HTTPS and HTTP/2 to `https://localhost:3445` | WebSocket, upgraded through Nginx |
 | behind Nginx, chunks | `chromium-nginx-chunks`, ... | HTTPS and HTTP/2 to `https://localhost:3446` | Chunks over HTTP/2, `FILE_UPLOAD_WS=false` |
+
+A few more setups each change one setting of the server and run their part of `config.spec.ts` in Chromium only, since a server setting acts the same in every browser: `forced-passwords` with `FORCE_FILE_PASSWORD`, `FORCE_NOTE_PASSWORD` and `FORCE_REQUEST_PASSWORD`, `files-only`, `notes-only` and `requests-only` with `ENABLED_SERVICES`, and `slow-uploads` with `FILE_UPLOAD_SPEED_LIMIT`, slow enough to cancel an upload halfway. The direct server also offers an expiry of 5 seconds next to the defaults, for `expiry.spec.ts`.
+
+Two setups bring a service of their own:
+
+- **`s3`** keeps the ciphertext in an S3 store, SeaweedFS in Docker, pinned by digest, since MinIO no longer publishes images. Downloads then come from the bucket through presigned URLs, which the file and request tests check, in Chromium for the Service Worker and in WebKit for the page.
+- **`oidc`** puts uploads behind a login with `OIDC_PROTECT_FILES` and `OIDC_PROTECT_NOTES`. `e2e/scripts/oidc.mjs` runs a test provider with [oidc-provider](https://github.com/panva/node-oidc-provider) over HTTPS with a certificate of its own, since the server only accepts an issuer over HTTPS. Only this server of the tests skips the certificate check, through `NODE_TLS_REJECT_UNAUTHORIZED=0`.
+
+A run never reuses a server it finds running, since that one would answer with its old configuration. A taken port fails the run instead. To run next to an open UI mode, shift every port, data directory and container: `E2E_PORT_OFFSET=1000 pnpm test:e2e`.
 
 Uploads that stalled behind reverse proxies, like the HTTP/2 problems fixed in v2.2.2 and v2.2.3, only show up when a proxy speaks HTTP/2 to the browser. Both proxies are set up the way [Reverse Proxy](/user-guide/self-hosting/reverse-proxy) tells operators to, with a certificate of their own that the browsers are told to accept:
 
@@ -126,9 +135,17 @@ Three checks run wherever a test shares, uploads or downloads:
 
 | File | Tests |
 | --- | --- |
-| `files.spec.ts` | A file byte for byte, several files as a zip, a password, a download limit |
+| `files.spec.ts` | A file byte for byte, one of 32 MB in several chunks, several files as a zip, a password, a download limit |
 | `notes.spec.ts` | A note of text, password and code blocks, a password, burn after reading |
 | `requests.spec.ts` | Files into a request and out of the inbox, files and a note as one submission, an inbox with a password |
+| `request-lifecycle.spec.ts` | A closed request and a full one turn senders away, an inbox deletes one file and then the request |
+| `links.spec.ts` | A `/d/` link of v1, and links a mail filter rewrote, which open and warn that the key reached the server |
+| `expiry.spec.ts` | A file, a note and a request stop working once their time runs out |
+| `my-links.spec.ts` | Shares and requests show in My Links, open from there and are deleted there |
+| `templates.spec.ts` | A template saved from the form starts a request, a sealed templates link moves one to another browser |
+| `mobile.spec.ts` | Sharing through the sheets of a phone screen, and no page wider than the screen |
+| `config.spec.ts` | Forced passwords, a single enabled service, a cancelled upload, sharing behind an OIDC login |
+| `cli.spec.ts` | The CLI and the browser open each other's shares, with a password both ways, and a note made in the CLI |
 | `guard.spec.ts` | The recording of the proxy sees headers, bodies and WebSocket frames |
 | `transport.spec.ts` | The page arrives over HTTP/1.1 or HTTP/2 as its setup promises, and an upload takes its transport |
 | `compat.spec.ts` | Every link of an older release still opens after an update, see below |

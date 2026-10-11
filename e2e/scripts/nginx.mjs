@@ -5,10 +5,11 @@
 // the upstream. The redirect from port 80 is left out, since no test opens it.
 //
 // Usage: node scripts/nginx.mjs <name> <port> <upstream port>
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runContainer } from "./container.mjs";
 
 /** Pinned by digest, so a run locally and one in CI use the same Nginx. */
 const IMAGE =
@@ -71,22 +72,7 @@ ${site}
 );
 
 // The host network lets Nginx reach the recording proxy on 127.0.0.1 and bind its port there.
-const container = `skysend-e2e-${name}`;
-const remove = () => execFileSync("docker", ["rm", "-f", container], { stdio: "ignore" });
-remove();
-const nginx = spawn(
-  "docker",
-  [
-    ...["run", "--rm", "--name", container, "--network", "host"],
-    ...["-v", `${dir}:/e2e:ro`, "--entrypoint", "nginx", IMAGE],
-    ...["-c", "/e2e/nginx.conf", "-g", "daemon off;"],
-  ],
-  { stdio: ["ignore", "inherit", "inherit"] },
-);
-for (const signal of ["SIGINT", "SIGTERM"]) {
-  process.on(signal, () => {
-    remove();
-    process.exit(0);
-  });
-}
-nginx.on("exit", (code) => process.exit(code ?? 1));
+runContainer(`skysend-e2e-${name}`, [
+  ...["--network", "host", "-v", `${dir}:/e2e:ro`, "--entrypoint", "nginx", IMAGE],
+  ...["-c", "/e2e/nginx.conf", "-g", "daemon off;"],
+]);

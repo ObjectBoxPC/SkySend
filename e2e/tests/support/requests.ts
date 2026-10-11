@@ -17,6 +17,8 @@ export async function createRequest(
     password?: string;
     /** How long the request stays open, by the label of its option, like "5s". */
     expiry?: string;
+    /** How many uploads the request takes, for a request that asks for files. */
+    uploads?: number;
   } = {},
 ) {
   await page.goto("/requests");
@@ -30,6 +32,9 @@ export async function createRequest(
   }
   if (options.expiry) {
     await pick(page, /^Open for/, "How long is the request open?", options.expiry);
+  }
+  if (options.uploads) {
+    await pick(page, /^\d+ uploads?$/, "How many uploads?", String(options.uploads));
   }
   if (options.password) await setPassword(page, options.password);
   await page.getByRole("button", { name: "Create request" }).click();
@@ -53,7 +58,7 @@ export async function sendToRequest(
     await page.locator('input[type="file"]:not([webkitdirectory])').setInputFiles(content.files);
   }
   for (const [label, value] of Object.entries(content.fields ?? {})) {
-    await page.getByLabel(label, { exact: true }).fill(value);
+    await page.getByRole("textbox", { name: label, exact: true }).fill(value);
   }
   if (content.text) {
     await page.getByRole("button", { name: /^Text/ }).click();

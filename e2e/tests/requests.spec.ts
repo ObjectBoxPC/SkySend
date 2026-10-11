@@ -1,5 +1,12 @@
 import { expect, test } from "./support/fixtures.js";
-import { randomFile, randomPassword, randomText, unlock, watchTiers } from "./support/flows.js";
+import {
+  randomFile,
+  randomPassword,
+  randomText,
+  unlock,
+  watchPresigned,
+  watchTiers,
+} from "./support/flows.js";
 import {
   createRequest,
   downloadFromInbox,
@@ -14,6 +21,7 @@ test("files sent to a request arrive in the inbox", async ({
   openRecipient,
   guard,
   expectedTier,
+  storage,
 }) => {
   const title = randomText("Tax documents");
   const file = randomFile(1024 * 1024 + 777);
@@ -32,6 +40,7 @@ test("files sent to a request arrive in the inbox", async ({
   // The requester opens the inbox on another device, with nothing but the inbox link.
   const inbox = await openRecipient();
   const tiers = watchTiers(inbox);
+  const presigned = watchPresigned(inbox);
   await openInbox(inbox, inboxLink);
   await expect(inbox.getByText(title)).toBeVisible();
   const received = await downloadFromInbox(inboxRow(inbox, file.name));
@@ -39,6 +48,8 @@ test("files sent to a request arrive in the inbox", async ({
   expect(received.name).toBe(file.name);
   expect(received.data.equals(file.buffer)).toBe(true);
   expect(tiers).toEqual([expectedTier]);
+  if (storage === "s3") expect(presigned.length, "a download from the bucket").toBeGreaterThan(0);
+  else expect(presigned).toEqual([]);
 });
 
 test("files and a note arrive together as one submission", async ({

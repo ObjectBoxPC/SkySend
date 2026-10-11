@@ -6,6 +6,7 @@ import {
   randomPassword,
   shareFiles,
   unlock,
+  watchPresigned,
   watchTiers,
 } from "./support/flows.js";
 
@@ -42,7 +43,13 @@ test("a file of several chunks arrives byte for byte", async ({
   expect(tiers).toEqual([expectedTier]);
 });
 
-test("a file arrives byte for byte", async ({ page, openRecipient, guard, expectedTier }) => {
+test("a file arrives byte for byte", async ({
+  page,
+  openRecipient,
+  guard,
+  expectedTier,
+  storage,
+}) => {
   // Many encryption records and WebSocket frames, with a short one at the end.
   const file = randomFile(3 * 1024 * 1024 + 4321);
   guard.text(file.name);
@@ -53,12 +60,16 @@ test("a file arrives byte for byte", async ({ page, openRecipient, guard, expect
 
   const recipient = await openRecipient();
   const tiers = watchTiers(recipient);
+  const presigned = watchPresigned(recipient);
   await recipient.goto(link);
   const received = await downloadFile(recipient);
 
   expect(received.name).toBe(file.name);
   expect(received.data.equals(file.buffer)).toBe(true);
   expect(tiers).toEqual([expectedTier]);
+  // With S3 the file comes from the bucket, through a presigned URL, never through the server.
+  if (storage === "s3") expect(presigned.length, "a download from the bucket").toBeGreaterThan(0);
+  else expect(presigned).toEqual([]);
 });
 
 test("several files arrive as one zip", async ({ page, openRecipient, guard, expectedTier }) => {

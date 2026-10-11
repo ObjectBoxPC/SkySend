@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 
 /** A file to share, with a name nobody else uses, so a leak of it cannot be a coincidence. */
 export function randomFile(size: number, extension = "bin") {
@@ -107,6 +107,17 @@ export async function shareNote(
   return shareLink(page);
 }
 
+/** Picks an item out of the "More actions" menu of a row, like in My Links or an inbox. */
+export async function rowMenu(row: Locator, item: string) {
+  await row.getByRole("button", { name: "More actions" }).click();
+  await row.page().getByRole("menuitem", { name: item, exact: true }).click();
+}
+
+/** Confirms the dialog that asks before something is deleted or closed. */
+export async function confirm(page: Page, action: string) {
+  await page.getByRole("dialog").getByRole("button", { name: action, exact: true }).click();
+}
+
 /** Types the password of a share into its prompt and unlocks it. */
 export async function unlock(page: Page, password: string) {
   await page.getByLabel("Enter password", { exact: true }).fill(password);
@@ -124,6 +135,18 @@ export function watchTiers(page: Page) {
     if (tier) tiers.push(tier[1]!);
   });
   return tiers;
+}
+
+/**
+ * Collects the presigned S3 requests of a browser. A server with S3 hands out such a URL and the
+ * browser downloads from the bucket itself, one with a filesystem streams the file through.
+ */
+export function watchPresigned(page: Page) {
+  const presigned: string[] = [];
+  page.context().on("request", (request) => {
+    if (/[?&]X-Amz-Signature=/.test(request.url())) presigned.push(request.url());
+  });
+  return presigned;
 }
 
 /** Downloads the file of an open file link and returns what arrived. */

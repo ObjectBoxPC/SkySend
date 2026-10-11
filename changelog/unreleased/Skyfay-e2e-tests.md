@@ -7,6 +7,7 @@
 
 - **infra**: End-to-end tests share files and notes and send to file requests in Chromium, Firefox and WebKit, directly and behind Caddy and Nginx with HTTPS and HTTP/2, then open them on the other side. They check that keys, filenames, passwords and contents never reach the server and that uploads and downloads take the path they should.
 - **infra**: The Nginx example of the reverse proxy guide runs in the end-to-end tests as written, so a change that breaks it fails its pull request.
+- **infra**: The end-to-end tests also cover My Links, closing, filling and deleting file requests, request templates, expiry by time, rewritten links and links of v1, uploads in several chunks, a cancelled upload, the phone layout and the settings for forced passwords and enabled services. They also run against S3 storage, behind an OIDC login and with shares between the CLI and the browser.
 - **infra**: The end-to-end tests open the links of v3.0.1 with the current version after it migrated that release's data, so a change that breaks old links fails its pull request.
 
 ### 🔧 CI/CD

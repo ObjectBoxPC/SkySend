@@ -87,6 +87,8 @@ export type TargetOptions = {
   protocol: "http/1.1" | "h2";
   /** How uploads travel, as the upload worker logs it. */
   uploadTransport: "ws" | "http";
+  /** Where the server keeps the ciphertext, which decides where a download comes from. */
+  storage: "filesystem" | "s3";
 };
 
 type Fixtures = {
@@ -113,6 +115,7 @@ function recordTransports(context: BrowserContext, transports: string[]) {
 export const test = base.extend<Fixtures & TargetOptions>({
   protocol: ["http/1.1", { option: true }],
   uploadTransport: ["ws", { option: true }],
+  storage: ["filesystem", { option: true }],
 
   uploadTransports: [
     async ({ context, uploadTransport }, use) => {

@@ -12,6 +12,7 @@
     "@playwright/test": "^1.64.0",
     "@skysend/crypto": "workspace:*",
     "@types/node": "^26.6.4",
-    "fflate": "^0.8.3"
+    "fflate": "^0.8.3",
+    "oidc-provider": "^9.12.2"
   }
 }
