@@ -2,6 +2,7 @@
 
 - **docs**: The testing guide explains how to run and write the end-to-end tests.
 - **docs**: Troubleshooting explains why Chrome asks where to save every download on an instance whose certificate it does not trust.
+- **docs**: The AI transparency section of the README names the end-to-end tests among the checks behind the code.
 
 ### 🧪 Tests
 
