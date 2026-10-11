@@ -26,6 +26,14 @@ export const META_IV_LENGTH = 12;
 export const METADATA_PAD_BLOCK = 1024;
 
 /**
+ * Whether a value is a byte count: a non-negative safe integer. JSON reads 1e999 as Infinity
+ * and 1.5 as a float, and a hand-built blob can carry either.
+ */
+function isByteCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+/**
  * Marks the uploads a sender of a file request sent together, files and a note. 32 hex
  * characters, random per send. Every upload into a request carries one, so the metadata of a
  * note sent alone is as long as the one of a note sent with files.
@@ -146,7 +154,7 @@ export async function decryptRequestMetadata(
   const data = await decryptJson(ciphertext, iv, metaKey);
   if (typeof data === "object" && data !== null && (data as { type?: unknown }).type === "note") {
     const { size } = data as { size?: unknown };
-    if (typeof size !== "number" || !Number.isSafeInteger(size) || size < 0) {
+    if (!isByteCount(size)) {
       throw new Error("Invalid metadata: invalid note size");
     }
     return { type: "note", size, ...submissionOf(data as Record<string, unknown>) };
@@ -208,7 +216,7 @@ function validateMetadata(data: unknown): FileMetadata {
     if (typeof obj.name !== "string" || obj.name.length === 0) {
       throw new Error("Invalid metadata: missing or empty file name");
     }
-    if (typeof obj.size !== "number" || obj.size < 0) {
+    if (!isByteCount(obj.size)) {
       throw new Error("Invalid metadata: invalid file size");
     }
     if (typeof obj.mimeType !== "string") {
@@ -236,20 +244,15 @@ function validateMetadata(data: unknown): FileMetadata {
       if (typeof f.name !== "string" || f.name.length === 0) {
         throw new Error("Invalid metadata: file entry missing name");
       }
-      if (typeof f.size !== "number" || f.size < 0) {
+      if (!isByteCount(f.size)) {
         throw new Error("Invalid metadata: file entry invalid size");
       }
       files.push({ name: f.name, size: f.size });
     }
-    if (typeof obj.totalSize !== "number" || obj.totalSize < 0) {
+    if (!isByteCount(obj.totalSize)) {
       throw new Error("Invalid metadata: invalid total size");
     }
-    if (
-      obj.archiveSize !== undefined &&
-      (typeof obj.archiveSize !== "number" ||
-        !Number.isSafeInteger(obj.archiveSize) ||
-        obj.archiveSize < 0)
-    ) {
+    if (obj.archiveSize !== undefined && !isByteCount(obj.archiveSize)) {
       throw new Error("Invalid metadata: invalid archive size");
     }
     return {

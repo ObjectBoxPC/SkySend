@@ -282,6 +282,73 @@ describe("metadata padding", () => {
   });
 });
 
+describe("validateMetadata - sizes", () => {
+  // JSON reads 1e999 as Infinity and 1.5 as a float, and JSON.stringify would normalize both
+  // away, so these blobs are built from raw text.
+  async function encryptRawText(json: string, metaKey: CryptoKey) {
+    return encryptRawBytes(new TextEncoder().encode(json), metaKey);
+  }
+
+  it.each(["1e999", "-1e999", "1.5", "9007199254740992", '"7"', "null"])(
+    "should reject a single-file size of %s",
+    async (size) => {
+      const metaKey = await getMetaKey();
+      const enc = await encryptRawText(
+        `{"type":"single","name":"a.txt","size":${size},"mimeType":"text/plain"}`,
+        metaKey,
+      );
+      await expect(decryptMetadata(enc.ciphertext, enc.iv, metaKey)).rejects.toThrow(
+        "invalid file size",
+      );
+    },
+  );
+
+  it.each(["1e999", "1.5"])("should reject a total size of %s", async (size) => {
+    const metaKey = await getMetaKey();
+    const enc = await encryptRawText(
+      `{"type":"archive","files":[{"name":"a","size":1}],"totalSize":${size}}`,
+      metaKey,
+    );
+    await expect(decryptMetadata(enc.ciphertext, enc.iv, metaKey)).rejects.toThrow(
+      "invalid total size",
+    );
+  });
+
+  it.each(["1e999", "1.5"])("should reject a file entry size of %s", async (size) => {
+    const metaKey = await getMetaKey();
+    const enc = await encryptRawText(
+      `{"type":"archive","files":[{"name":"a","size":${size}}],"totalSize":1}`,
+      metaKey,
+    );
+    await expect(decryptMetadata(enc.ciphertext, enc.iv, metaKey)).rejects.toThrow(
+      "file entry invalid size",
+    );
+  });
+
+  it("should reject a note size of 1e999 in a request upload", async () => {
+    const metaKey = await getMetaKey();
+    const enc = await encryptRawText('{"type":"note","size":1e999}', metaKey);
+    await expect(decryptRequestMetadata(enc.ciphertext, enc.iv, metaKey)).rejects.toThrow(
+      "invalid note size",
+    );
+  });
+
+  it("should still accept long names, many entries and an empty MIME type", async () => {
+    // The library checks shape and sizes only. The clients escape names where they show them
+    // and sanitize them where they save them, so an upload that opened before keeps opening.
+    const metaKey = await getMetaKey();
+    const single = await encryptRawJson(
+      { type: "single", name: "a".repeat(10_000), size: 0, mimeType: "" },
+      metaKey,
+    );
+    expect((await decryptMetadata(single.ciphertext, single.iv, metaKey)).type).toBe("single");
+    const files = Array(5_000).fill({ name: "dir/a.txt", size: 1 });
+    const archive = await encryptRawJson({ type: "archive", files, totalSize: 5_000 }, metaKey);
+    const decrypted = await decryptMetadata(archive.ciphertext, archive.iv, metaKey);
+    expect(decrypted.type === "archive" && decrypted.files.length).toBe(5_000);
+  });
+});
+
 describe("validateMetadata - invalid shapes (via decryptMetadata)", () => {
   it("should reject null (not an object)", async () => {
     const metaKey = await getMetaKey();
