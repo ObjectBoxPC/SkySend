@@ -1,6 +1,6 @@
 # Testing Guide
 
-SkySend uses [Vitest](https://vitest.dev/) for unit and integration testing.
+SkySend uses [Vitest](https://vitest.dev/) for unit and integration testing and [Playwright](https://playwright.dev/) for end-to-end tests in Chromium, Firefox and WebKit. See [End-to-End Tests](#end-to-end-tests).
 
 ## Running Tests
 
@@ -76,3 +76,123 @@ The server tests use a shared `helpers.ts` file that provides:
 - Test database setup/teardown
 - Pre-configured Hono app instances
 - Helper functions for creating test uploads
+
+## End-to-End Tests
+
+The end-to-end tests in `e2e/` drive the real app in Chromium, Firefox and WebKit, the way a person would: share a file or a note, open the link in a second browser that knows nothing of the sender, download or read it and compare it with what was shared.
+
+```bash
+# Once: the three browsers, on Linux the system libraries they need (asks for sudo), and Caddy
+pnpm test:e2e:install
+
+# Build the server and the SPA, then run every test in all three browsers and every setup
+pnpm test:e2e
+
+# Build, then pick tests and watch them run, step by step, at http://localhost:9323
+pnpm test:e2e:ui
+
+# Build, then send a file of 5 GiB up and down, see below. Needs about 11 GB of free disk.
+pnpm test:e2e:large
+
+# The report of the last run, with screenshots, videos and traces of failed tests
+pnpm --filter @skysend/e2e exec playwright show-report
+```
+
+The UI is a web page on `http://localhost:9323`. It needs a secure context for its Service Worker, so open it through `localhost`, not through the IP address or hostname of the machine. On a machine without a display, like a VM, use a browser on that machine or forward the port. The UI starts with the `chromium` project only, the Projects filter at the top of the test list adds the others.
+
+### How a run works
+
+The tests run against the production build, where the server serves the SPA and the API from one origin, the way an instance does. `e2e/scripts/serve.mjs` starts a server on an empty data directory in the system temp folder and puts a small recording proxy in front of it, which passes everything on to the server one port above.
+
+Each setup is a server of its own. The direct one runs every test of the app in all three browsers. The setups behind a reverse proxy run what goes over the wire, in Chromium and Firefox: files, file requests, links and transports, plus the notes behind Caddy and the guard wherever there is a WebSocket. WebKit on Linux speaks HTTP/2 and TLS through a network stack of its own that no Safari uses, so behind a proxy it would only test that. It runs in the direct setup, with S3 and against the snapshots instead.
+
+| Setup | Projects | Browser to SkySend | Uploads |
+| --- | --- | --- | --- |
+| direct | `chromium`, `firefox`, `webkit` | HTTP/1.1 to `http://localhost:3170` | WebSocket |
+| behind Caddy | `chromium-caddy`, ... | HTTPS and HTTP/2 to `https://localhost:3443` | WebSocket, upgraded through Caddy |
+| behind Caddy, chunks | `chromium-caddy-chunks`, ... | HTTPS and HTTP/2 to `https://localhost:3444` | Chunks over HTTP/2, `FILE_UPLOAD_WS=false` |
+| behind Nginx | `chromium-nginx`, ... | HTTPS and HTTP/2 to `https://localhost:3445` | WebSocket, upgraded through Nginx |
+| behind Nginx, chunks | `chromium-nginx-chunks`, ... | HTTPS and HTTP/2 to `https://localhost:3446` | Chunks over HTTP/2, `FILE_UPLOAD_WS=false` |
+
+A few more setups each change one setting of the server and run their part of `config.spec.ts` in Chromium only, since a server setting acts the same in every browser: `forced-passwords` with `FORCE_FILE_PASSWORD`, `FORCE_NOTE_PASSWORD` and `FORCE_REQUEST_PASSWORD`, `files-only`, `notes-only` and `requests-only` with `ENABLED_SERVICES`, and `slow-uploads` with `FILE_UPLOAD_SPEED_LIMIT`, slow enough to cancel an upload halfway. The direct server also offers an expiry of 5 seconds next to the defaults, for `expiry.spec.ts`.
+
+Two setups bring a service of their own:
+
+- **`s3`** keeps the ciphertext in an S3 store, SeaweedFS in Docker, pinned by digest, since MinIO no longer publishes images. Downloads then come from the bucket through presigned URLs, which the file and request tests check, in Chromium for the Service Worker and in WebKit for the page.
+- **`oidc`** puts uploads behind a login with `OIDC_PROTECT_FILES` and `OIDC_PROTECT_NOTES`. `e2e/scripts/oidc.mjs` runs a test provider with [oidc-provider](https://github.com/panva/node-oidc-provider) over HTTPS with a certificate of its own, since the server only accepts an issuer over HTTPS. Only this server of the tests skips the certificate check, through `NODE_TLS_REJECT_UNAUTHORIZED=0`.
+
+A run never reuses a server it finds running, since that one would answer with its old configuration. A taken port fails the run instead. To run next to an open UI mode, shift every port, data directory and container: `E2E_PORT_OFFSET=1000 pnpm test:e2e`.
+
+Uploads that stalled behind reverse proxies, like the HTTP/2 problems fixed in v2.2.2 and v2.2.3, only show up when a proxy speaks HTTP/2 to the browser. Both proxies are set up the way [Reverse Proxy](/user-guide/self-hosting/reverse-proxy) tells operators to, with a certificate of their own that the browsers are told to accept:
+
+- **Caddy** gets nothing but the `reverse_proxy` line per site, see `e2e/proxies/Caddyfile`. `pnpm test:e2e:install` downloads it into `e2e/.tools/` and checks it against a pinned SHA-512.
+- **Nginx** runs the example of the docs page itself. `e2e/scripts/nginx.mjs` reads the `nginx` block out of `reverse-proxy.md` on every start and only replaces the port, the certificate and the upstream, so a change to that example is tested by the next run. It runs the official Nginx image, pinned by digest, on the host network, which takes Docker, and on a Mac the host networking of Docker Desktop.
+
+Without Caddy or Docker, a local run leaves out the setups behind them and says so. CI fails instead.
+
+Three checks run wherever a test shares, uploads or downloads:
+
+- **Nothing secret reaches the server.** Each test names what only the sender and the recipient may know: the key from the link fragment, the filenames, passwords, note text and a stretch of each file. After the test, everything the proxy recorded is searched for them, in URLs, headers, request bodies and WebSocket frames. The search runs on the server side because Playwright does not see all traffic in every browser. `guard.spec.ts` makes sure the recording sees what a leak would look like.
+- **The download takes the path meant for the browser.** Chromium and Firefox download through the Service Worker (tier 1), WebKit through the Blob fallback (tier 3), see [Download Modes](/developer-guide/download-modes). A tier that fails falls through to the next and the download still arrives, so the tests check the tier the app logged as well.
+- **Uploads take the transport of the setup.** A broken WebSocket would fall back to chunks without a word, so every upload has to log the transport its setup offers.
+
+| File | Tests |
+| --- | --- |
+| `files.spec.ts` | A file byte for byte, one of 32 MB in several chunks, several files as a zip, a password, a download limit |
+| `notes.spec.ts` | A note of text, password and code blocks, a password, burn after reading |
+| `requests.spec.ts` | Files into a request and out of the inbox, files and a note as one submission, an inbox with a password |
+| `request-lifecycle.spec.ts` | A closed request and a full one turn senders away, an inbox deletes one file and then the request |
+| `links.spec.ts` | A `/d/` link of v1, and links a mail filter rewrote, which open and warn that the key reached the server |
+| `expiry.spec.ts` | A file, a note and a request stop working once their time runs out |
+| `my-links.spec.ts` | Shares and requests show in My Links, open from there and are deleted there |
+| `templates.spec.ts` | A template saved from the form starts a request, a sealed templates link moves one to another browser |
+| `mobile.spec.ts` | Sharing through the sheets of a phone screen, and no page wider than the screen |
+| `config.spec.ts` | Forced passwords, a single enabled service, a cancelled upload, sharing behind an OIDC login |
+| `crafted-note.spec.ts` | A note full of markup that would run, load or restyle shows inert in every engine, checked in the rendered page |
+| `large.spec.ts` | A file of 5 GiB up and down byte for byte, in a job of its own, see below |
+| `cli.spec.ts` | The CLI and the browser open each other's shares, with a password both ways, and a note made in the CLI |
+| `guard.spec.ts` | The recording of the proxy sees headers, bodies and WebSocket frames |
+| `transport.spec.ts` | The page arrives over HTTP/1.1 or HTTP/2 as its setup promises, and an upload takes its transport |
+| `compat.spec.ts` | Every link of an older release still opens after an update, see below |
+
+The **E2E Tests** jobs in `.github/workflows/validate.yml` run them on pull requests, one job per browser. A pull request into `dev` that changes nothing they build, run or read skips them, like one that only touches the website, the Workers or other docs. The **Changes** job decides that from the changed files in a few seconds. Pull requests into `main`, the release and a run started by hand always run them. `E2E_BROWSER` picks the engine, and a run then starts only the servers, proxies and containers that engine's projects need, so the Firefox job never pulls the S3 store. The same works locally, like `E2E_BROWSER=webkit pnpm test:e2e`, or with a list like `chromium,webkit`. When a job fails, its report with screenshots, videos and traces is attached to the run as the `e2e-report-<browser>` artifact. A trace opens with `pnpm --filter @skysend/e2e exec playwright show-trace <trace.zip>`.
+
+### A file of 5 GiB
+
+Sizes overflow where they pass 2 GiB and 4 GiB, which no other test reaches. `large.spec.ts` writes a file of 5 GiB for the run, in which every block of a MiB differs so a swapped, repeated or lost block shows, sends it up through Nginx with TLS and HTTP/2, downloads it through the Service Worker of Chromium and compares the SHA-256. It runs alone, in the **E2E Large File** job beside the others, and the log of the run notes how fast each step went. WebKit is left out, since it assembles a download in memory, which a file this size does not fit, and the recording proxy keeps headers only, since no memory holds the bodies.
+
+```bash
+pnpm test:e2e:large
+
+# A smaller file to try the setup, in bytes
+E2E_LARGE_SIZE=314572800 pnpm test:e2e:large
+```
+
+`pnpm test:e2e` leaves it out. The run needs about 11 GB of free disk, since the server holds the ciphertext while the download arrives beside it, and checks that before it writes anything. It keeps everything on the disk of the checkout, the source in `e2e/test-results/` and the server data and the download in `e2e/.large-files/`, never in the temp folder, which some systems keep in memory. A finished run leaves none of it behind.
+
+### Links from older releases
+
+An update must not break the links an instance handed out before it. `compat.spec.ts` checks that for every release with a snapshot in `e2e/compat/snapshots/<version>/`:
+
+- `data.tar.gz` holds the data directory and the uploads of a server of that release, right after it shared files, notes and file requests through its own UI.
+- `links.json` lists what was shared: the links with their keys, the passwords, the names, and the seeds the file contents are made from, so the snapshot does not have to keep the original files.
+
+A run starts the current server on a copy of each snapshot, moves every expiry a year ahead and lets the server migrate the database the way it does after an update. Then every link is opened in all three browsers. Files are downloaded and compared byte for byte, notes and inboxes are opened, and a request made before the update takes a new upload.
+
+A snapshot is made once and committed. After a release, run:
+
+```bash
+pnpm --filter @skysend/e2e compat:seed v3.0.2
+```
+
+It starts the published image of that version with Docker, shares through its UI with `e2e/compat/seed/release.spec.ts`, and writes the snapshot. A release whose UI the current test helpers no longer fit gets a seed of its own, `e2e/compat/seed/<version>.spec.ts`, written against that UI.
+
+### Writing an end-to-end test
+
+- Import `test` and `expect` from `./support/fixtures.js`, not from `@playwright/test`, so the guard runs.
+- Tell the guard what has to stay secret: `guard.secretOf(link)`, `guard.requestLinks(uploadLink, inboxLink)` for a file request, `guard.text(...)` and `guard.content(name, data)`.
+- Open the recipient with `openRecipient()`, a browser of its own without the IndexedDB and storage of the sender.
+- Share and download through the helpers in `support/flows.ts`, and work with file requests through `support/requests.ts`. Generate the data with `randomFile`, `randomText` and `randomPassword`, so every value is unique and a hit cannot be a coincidence.
+- Find elements by role and label, like a screen reader would. The browsers run with the `en-US` locale, so the labels are the English strings of the SPA.
+
+WebKit on Linux is close to Safari but not the same. Behavior of Safari on an iPhone or iPad, like the early end of a Service Worker or the memory a large download takes, still needs a check on a real device.
