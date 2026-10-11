@@ -1,0 +1,145 @@
+import { unzipSync } from "fflate";
+import { expect, scanServer, test } from "./support/fixtures.js";
+import {
+  downloadFile,
+  randomFile,
+  randomPassword,
+  shareFiles,
+  unlock,
+  watchPresigned,
+  watchTiers,
+} from "./support/flows.js";
+
+test("a file of several chunks arrives byte for byte", async ({
+  page,
+  request,
+  openRecipient,
+  guard,
+  expectedTier,
+  uploadTransport,
+}) => {
+  // Four chunks of 10 MiB over HTTP with three in flight at once, where uploads stalled behind
+  // HTTP/2 proxies in v2.2.3, or a long run of WebSocket frames past its backpressure mark.
+  const file = randomFile(32 * 1024 * 1024 + 4321);
+  // 32 MB up and down, which WebKit decrypts in memory, can take over a minute on a CI runner
+  // with other tests beside it.
+  test.slow();
+  guard.text(file.name);
+  guard.content(file.name, file.buffer);
+
+  const link = await shareFiles(page, [file]);
+  guard.secretOf(link);
+  if (uploadTransport === "http") {
+    const id = new URL(link).pathname.split("/").pop();
+    const fourth = { name: "fourth chunk", bytes: Buffer.from(`/api/upload/${id}/chunk?index=3`) };
+    const hits = await scanServer(request, [fourth]);
+    expect(hits.map((hit) => hit.name)).toContain("fourth chunk");
+  }
+
+  const recipient = await openRecipient();
+  const tiers = watchTiers(recipient);
+  await recipient.goto(link);
+  const received = await downloadFile(recipient);
+
+  expect(received.name).toBe(file.name);
+  expect(received.data.equals(file.buffer)).toBe(true);
+  expect(tiers).toEqual([expectedTier]);
+});
+
+test("a file arrives byte for byte", async ({
+  page,
+  openRecipient,
+  guard,
+  expectedTier,
+  storage,
+}) => {
+  // Many encryption records and WebSocket frames, with a short one at the end.
+  const file = randomFile(3 * 1024 * 1024 + 4321);
+  guard.text(file.name);
+  guard.content(file.name, file.buffer);
+
+  const link = await shareFiles(page, [file]);
+  guard.secretOf(link);
+
+  const recipient = await openRecipient();
+  const tiers = watchTiers(recipient);
+  const presigned = watchPresigned(recipient);
+  await recipient.goto(link);
+  const received = await downloadFile(recipient);
+
+  expect(received.name).toBe(file.name);
+  expect(received.data.equals(file.buffer)).toBe(true);
+  expect(tiers).toEqual([expectedTier]);
+  // With S3 the file comes from the bucket, through a presigned URL, never through the server.
+  if (storage === "s3") expect(presigned.length, "a download from the bucket").toBeGreaterThan(0);
+  else expect(presigned).toEqual([]);
+});
+
+test("several files arrive as one zip", async ({ page, openRecipient, guard, expectedTier }) => {
+  const files = [randomFile(200_000), randomFile(70_000, "txt"), randomFile(1)];
+  for (const file of files) {
+    guard.text(file.name);
+    guard.content(file.name, file.buffer);
+  }
+
+  const link = await shareFiles(page, files);
+  guard.secretOf(link);
+
+  const recipient = await openRecipient();
+  const tiers = watchTiers(recipient);
+  await recipient.goto(link);
+  const received = await downloadFile(recipient);
+
+  expect(received.name).toMatch(/\.zip$/);
+  const entries = unzipSync(new Uint8Array(received.data));
+  expect(Object.keys(entries).sort()).toEqual(files.map((file) => file.name).sort());
+  for (const file of files) {
+    expect(Buffer.from(entries[file.name]!).equals(file.buffer), file.name).toBe(true);
+  }
+  expect(tiers).toEqual([expectedTier]);
+});
+
+test("a password protects a file", async ({ page, openRecipient, guard, expectedTier }) => {
+  const file = randomFile(300_000);
+  const password = randomPassword();
+  guard.text(file.name, password);
+  guard.content(file.name, file.buffer);
+
+  const link = await shareFiles(page, [file], { password });
+  guard.secretOf(link);
+
+  const recipient = await openRecipient();
+  const tiers = watchTiers(recipient);
+  await recipient.goto(link);
+  await expect(recipient.getByText("This file is password-protected")).toBeVisible();
+  await expect(recipient.getByText(file.name)).toHaveCount(0);
+
+  await unlock(recipient, `${password}-wrong`);
+  await expect(recipient.getByText("Incorrect password")).toBeVisible();
+
+  await unlock(recipient, password);
+  const received = await downloadFile(recipient);
+  expect(received.name).toBe(file.name);
+  expect(received.data.equals(file.buffer)).toBe(true);
+  expect(tiers).toEqual([expectedTier]);
+});
+
+test("a file is gone once its downloads are used up", async ({ page, openRecipient, guard }) => {
+  const file = randomFile(50_000);
+  guard.text(file.name);
+
+  const link = await shareFiles(page, [file], { downloads: 2 });
+  guard.secretOf(link);
+
+  for (let i = 0; i < 2; i++) {
+    const recipient = await openRecipient();
+    await recipient.goto(link);
+    const received = await downloadFile(recipient);
+    expect(received.data.equals(file.buffer)).toBe(true);
+  }
+
+  const late = await openRecipient();
+  await late.goto(link);
+  await expect(late.getByText("Download limit reached")).toBeVisible();
+  await expect(late.getByRole("button", { name: "Download", exact: true })).toHaveCount(0);
+});

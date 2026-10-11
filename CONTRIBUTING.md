@@ -70,6 +70,7 @@ pnpm validate     # Run all tests (unit, lint, typecheck)
 pnpm lint         # Run linters
 pnpm typecheck    # Run TypeScript type checks
 pnpm test         # Run unit tests
+pnpm test:e2e     # Run end-to-end tests in Chromium, Firefox and WebKit (pnpm test:e2e:install first)
 ```
 
 ## Guidelines

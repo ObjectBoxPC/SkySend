@@ -87,6 +87,8 @@ Tests are written with Vitest. Each package has its own test directory:
 - `apps/server/tests/` - Server tests
 - `apps/client/` - CLI client (use `pnpm --filter @skysend/client run` for manual testing)
 
+The end-to-end tests in `e2e/` run the app in Chromium, Firefox and WebKit with Playwright. Install the browsers once with `pnpm test:e2e:install`, then run `pnpm test:e2e`. See the [Testing Guide](/developer-guide/reference/testing#end-to-end-tests).
+
 ## Linting & Formatting
 
 ```bash
@@ -127,6 +129,9 @@ All packages share a root `tsconfig.json` and ESLint configuration. Each package
 | `pnpm dev` | Start all packages in dev mode |
 | `pnpm build` | Build all packages |
 | `pnpm test` | Run all tests |
+| `pnpm test:e2e` | Build, then run the end-to-end tests in Chromium, Firefox and WebKit |
+| `pnpm test:e2e:ui` | Build, then pick and watch end-to-end tests in the Playwright UI at `http://localhost:9323` |
+| `pnpm test:e2e:install` | Install the browsers for the end-to-end tests |
 | `pnpm lint` | Run ESLint |
 | `pnpm lint:fix` | Run ESLint with auto-fix |
 | `pnpm format` | Format with Prettier |

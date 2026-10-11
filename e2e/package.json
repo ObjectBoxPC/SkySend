@@ -1,0 +1,19 @@
+{
+  "name": "@skysend/e2e",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:e2e": "playwright test",
+    "test:e2e:large": "E2E_LARGE=1 playwright test",
+    "typecheck": "tsc --noEmit",
+    "compat:seed": "node compat/seed.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.0",
+    "@skysend/crypto": "workspace:*",
+    "@types/node": "^26.6.4",
+    "fflate": "^0.8.3",
+    "oidc-provider": "^9.12.2"
+  }
+}
