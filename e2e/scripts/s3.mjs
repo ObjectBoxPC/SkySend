@@ -5,10 +5,7 @@
 //
 // Usage: node scripts/s3.mjs <name> <port> <bucket>
 import { runContainer } from "./container.mjs";
-
-/** Pinned by digest, so a run locally and one in CI use the same store. */
-const IMAGE =
-  "chrislusf/seaweedfs:4.48@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d";
+import { IMAGES } from "./images.mjs";
 
 const [name, port, bucket] = process.argv.slice(2);
 if (!name || !port || !bucket) throw new Error("Usage: node scripts/s3.mjs <name> <port> <bucket>");
@@ -17,7 +14,7 @@ if (!name || !port || !bucket) throw new Error("Usage: node scripts/s3.mjs <name
 // log is long and of no use to a test, and its usage statistics stay off.
 runContainer(
   `skysend-e2e-${name}`,
-  ["--publish", `127.0.0.1:${port}:8333`, IMAGE, "server", "-s3", "-master.telemetry=false"],
+  ["--publish", `127.0.0.1:${port}:8333`, IMAGES.s3, "server", "-s3", "-master.telemetry=false"],
   { quiet: true },
 );
 

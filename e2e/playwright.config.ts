@@ -45,6 +45,11 @@ const GUARD = "**/guard.spec.ts";
 // Specs of their own setups, each test titled with the [tag] of its setup.
 const COMPAT = "**/compat.spec.ts";
 const CONFIG = "**/config.spec.ts";
+// The engines behind a reverse proxy. WebKit on Linux speaks HTTP/2 and TLS through libsoup,
+// a network stack no Safari has, so behind a proxy it would only test that. Chromium and
+// Firefox ship the network stacks people use, and WebKit keeps its own path in the direct
+// setup and with S3.
+const PROXY_ENGINES: Engine[] = ["chromium", "firefox"];
 
 /** Expiries of 5 seconds next to the defaults, for expiry.spec.ts. The defaults stay as they are. */
 const SHORT_EXPIRY = {
@@ -95,6 +100,7 @@ const TARGETS: Target[] = [
     env: { TRUST_PROXY: "true" },
     // Notes run behind one proxy, which is enough for a single request each way.
     testMatch: [...WIRE, NOTES, GUARD],
+    engines: PROXY_ENGINES,
   },
   {
     // Chunks over HTTP/2 is where uploads stalled behind proxies before, in v2.2.2 and v2.2.3.
@@ -106,6 +112,7 @@ const TARGETS: Target[] = [
     proxy: "caddy",
     env: { TRUST_PROXY: "true", FILE_UPLOAD_WS: "false" },
     testMatch: WIRE,
+    engines: PROXY_ENGINES,
   },
   {
     name: "nginx",
@@ -116,6 +123,7 @@ const TARGETS: Target[] = [
     proxy: "nginx",
     env: { TRUST_PROXY: "true" },
     testMatch: [...WIRE, GUARD],
+    engines: PROXY_ENGINES,
   },
   {
     name: "nginx-chunks",
@@ -126,6 +134,7 @@ const TARGETS: Target[] = [
     proxy: "nginx",
     env: { TRUST_PROXY: "true", FILE_UPLOAD_WS: "false" },
     testMatch: WIRE,
+    engines: PROXY_ENGINES,
   },
   variant("forced-passwords", 3610, {
     FORCE_FILE_PASSWORD: "true",

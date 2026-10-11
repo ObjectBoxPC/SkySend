@@ -10,10 +10,8 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runContainer } from "./container.mjs";
+import { IMAGES } from "./images.mjs";
 
-/** Pinned by digest, so a run locally and one in CI use the same Nginx. */
-const IMAGE =
-  "nginx:1.30.5-alpine@sha256:0985e772fb9f729e6fa0980da05fca5d9c468e870eed43071545afa9d2e27d94";
 const DOCS = new URL("../../docs/user-guide/self-hosting/reverse-proxy.md", import.meta.url);
 
 const [name, port, upstream] = process.argv.slice(2);
@@ -73,6 +71,6 @@ ${site}
 
 // The host network lets Nginx reach the recording proxy on 127.0.0.1 and bind its port there.
 runContainer(`skysend-e2e-${name}`, [
-  ...["--network", "host", "-v", `${dir}:/e2e:ro`, "--entrypoint", "nginx", IMAGE],
+  ...["--network", "host", "-v", `${dir}:/e2e:ro`, "--entrypoint", "nginx", IMAGES.nginx],
   ...["-c", "/e2e/nginx.conf", "-g", "daemon off;"],
 ]);

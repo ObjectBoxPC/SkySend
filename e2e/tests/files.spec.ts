@@ -21,6 +21,9 @@ test("a file of several chunks arrives byte for byte", async ({
   // Four chunks of 10 MiB over HTTP with three in flight at once, where uploads stalled behind
   // HTTP/2 proxies in v2.2.3, or a long run of WebSocket frames past its backpressure mark.
   const file = randomFile(32 * 1024 * 1024 + 4321);
+  // 32 MB up and down, which WebKit decrypts in memory, can take over a minute on a CI runner
+  // with other tests beside it.
+  test.slow();
   guard.text(file.name);
   guard.content(file.name, file.buffer);
 

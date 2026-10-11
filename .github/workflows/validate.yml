@@ -155,7 +155,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        browser: [chromium, firefox, webkit]
+        # The images of the services each browser runs: Nginx behind Chromium and Firefox, the
+        # S3 store behind Chromium and WebKit. See e2e/scripts/images.mjs.
+        include:
+          - browser: chromium
+            images: nginx s3
+          - browser: firefox
+            images: nginx
+          - browser: webkit
+            images: s3
     env:
       E2E_BROWSER: ${{ matrix.browser }}
     steps:
@@ -167,6 +175,10 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+
+      # Pulls the Docker images in the background while the rest installs. Only a head start:
+      # a service that still misses its image when it starts pulls it itself.
+      - run: nohup node e2e/scripts/images.mjs ${{ matrix.images }} > "$RUNNER_TEMP/images.log" 2>&1 &
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @skysend/e2e exec playwright install --with-deps ${{ matrix.browser }}

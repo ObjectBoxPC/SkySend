@@ -101,7 +101,7 @@ The UI is a web page on `http://localhost:9323`. It needs a secure context for i
 
 The tests run against the production build, where the server serves the SPA and the API from one origin, the way an instance does. `e2e/scripts/serve.mjs` starts a server on an empty data directory in the system temp folder and puts a small recording proxy in front of it, which passes everything on to the server one port above.
 
-Each setup is a server of its own. The direct one runs every test of the app in all three browsers. The setups behind a reverse proxy run what goes over the wire: files, file requests, links and transports, plus the notes behind Caddy and the guard wherever there is a WebSocket.
+Each setup is a server of its own. The direct one runs every test of the app in all three browsers. The setups behind a reverse proxy run what goes over the wire, in Chromium and Firefox: files, file requests, links and transports, plus the notes behind Caddy and the guard wherever there is a WebSocket. WebKit on Linux speaks HTTP/2 and TLS through a network stack of its own that no Safari uses, so behind a proxy it would only test that. It runs in the direct setup, with S3 and against the snapshots instead.
 
 | Setup | Projects | Browser to SkySend | Uploads |
 | --- | --- | --- | --- |
