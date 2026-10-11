@@ -175,15 +175,30 @@ const tools = {
     missing: "Docker is not available, so Nginx and the S3 store cannot run",
   },
 };
-for (const { ready, missing } of Object.values(tools)) {
-  if (ready) continue;
-  if (CI) throw new Error(missing);
-  if (!process.env.TEST_WORKER_INDEX) console.warn(`${missing}. The tests behind it are left out.`);
+function needs(target: Target): keyof typeof tools | null {
+  if (target.proxy === "caddy") return "caddy";
+  if (target.proxy === "nginx" || target.service?.kind === "s3") return "docker";
+  return null;
 }
-function ready(target: Target) {
-  if (target.proxy === "caddy") return tools.caddy.ready;
-  if (target.proxy === "nginx" || target.service?.kind === "s3") return tools.docker.ready;
-  return true;
+
+/**
+ * Runs the projects of some engines only, with the servers and services those need and no
+ * others: E2E_BROWSER=firefox, or a list like chromium,webkit. CI runs one job per engine, so
+ * the Firefox job, for one, never pulls the S3 store, which only Chromium and WebKit test.
+ */
+const ENGINES: Engine[] = ["chromium", "firefox", "webkit"];
+const BROWSERS = (process.env.E2E_BROWSER ?? "")
+  .split(",")
+  .map((name) => name.trim())
+  .filter(Boolean);
+for (const name of BROWSERS) {
+  if (!ENGINES.includes(name as Engine)) throw new Error(`E2E_BROWSER names no engine: ${name}`);
+}
+/** The engines a setup runs in, within E2E_BROWSER. */
+function enginesOf(target: Target): Engine[] {
+  return (target.engines ?? ENGINES).filter(
+    (engine) => BROWSERS.length === 0 || BROWSERS.includes(engine),
+  );
 }
 
 /** The bucket of the S3 setup and the client of the OIDC one, see scripts/s3.mjs and oidc.mjs. */
@@ -241,7 +256,18 @@ function shifted(target: Target): Target {
   };
 }
 
-const targets = TARGETS.map(shifted).filter(ready);
+const selected = TARGETS.map(shifted).filter((target) => enginesOf(target).length > 0);
+for (const [name, tool] of Object.entries(tools)) {
+  if (tool.ready || !selected.some((target) => needs(target) === name)) continue;
+  if (CI) throw new Error(tool.missing);
+  if (!process.env.TEST_WORKER_INDEX) {
+    console.warn(`${tool.missing}. The tests behind it are left out.`);
+  }
+}
+const targets = selected.filter((target) => {
+  const tool = needs(target);
+  return !tool || tools[tool].ready;
+});
 const behind = (proxy: Target["proxy"]) => targets.filter((target) => target.proxy === proxy);
 const [caddyWs, caddyChunks] = behind("caddy");
 
@@ -286,7 +312,7 @@ export default defineConfig<TargetOptions>({
   },
   projects: targets.flatMap((target) =>
     engines
-      .filter(([engine]) => !target.engines || target.engines.includes(engine))
+      .filter(([engine]) => enginesOf(target).includes(engine))
       .map(([engine, device]) => {
         // Caddy signs with its own CA, which no browser knows.
         const https = target.origin.startsWith("https:");

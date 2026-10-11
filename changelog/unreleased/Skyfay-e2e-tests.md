@@ -12,4 +12,5 @@
 
 ### 🔧 CI/CD
 
-- **infra**: Pull requests run the end-to-end tests in a job of their own, which keeps the screenshots, videos and traces of a failed run for seven days.
+- **infra**: Pull requests run the end-to-end tests in one job per browser, each starting only the services its tests need, and keep the screenshots, videos and traces of a failed job for seven days.
+- **infra**: A pull request into dev that changes nothing the end-to-end tests cover, like one for the website alone, skips them, and Validate can also be started by hand.

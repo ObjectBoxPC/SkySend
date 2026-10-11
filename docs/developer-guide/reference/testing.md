@@ -150,7 +150,7 @@ Three checks run wherever a test shares, uploads or downloads:
 | `transport.spec.ts` | The page arrives over HTTP/1.1 or HTTP/2 as its setup promises, and an upload takes its transport |
 | `compat.spec.ts` | Every link of an older release still opens after an update, see below |
 
-The **E2E Tests** job in `.github/workflows/validate.yml` runs them on every pull request. When it fails, the report with screenshots, videos and traces is attached to the run as the `e2e-report` artifact. A trace opens with `pnpm --filter @skysend/e2e exec playwright show-trace <trace.zip>`.
+The **E2E Tests** jobs in `.github/workflows/validate.yml` run them on pull requests, one job per browser. A pull request into `dev` that changes nothing they build, run or read skips them, like one that only touches the website, the Workers or other docs. The **Changes** job decides that from the changed files in a few seconds. Pull requests into `main`, the release and a run started by hand always run them. `E2E_BROWSER` picks the engine, and a run then starts only the servers, proxies and containers that engine's projects need, so the Firefox job never pulls the S3 store. The same works locally, like `E2E_BROWSER=webkit pnpm test:e2e`, or with a list like `chromium,webkit`. When a job fails, its report with screenshots, videos and traces is attached to the run as the `e2e-report-<browser>` artifact. A trace opens with `pnpm --filter @skysend/e2e exec playwright show-trace <trace.zip>`.
 
 ### Links from older releases
 
