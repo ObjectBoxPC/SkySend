@@ -7,7 +7,8 @@
     "test:e2e": "playwright test",
     "test:e2e:large": "E2E_LARGE=1 playwright test",
     "typecheck": "tsc --noEmit",
-    "compat:seed": "node compat/seed.mjs"
+    "compat:seed": "node compat/seed.mjs",
+    "bench": "node bench/transfer.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.0",

@@ -16,6 +16,7 @@ import { Upload } from "@aws-sdk/lib-storage";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { Readable } from "node:stream";
 import type { createReadStream } from "node:fs";
+import { describeError } from "../lib/log-error.js";
 import type { StorageBackend } from "./types.js";
 
 /** Minimum part size for S3 multipart uploads (5 MB - S3 requirement for non-final parts). */
@@ -35,7 +36,10 @@ export interface S3StorageConfig {
 
 interface MultipartSession {
   uploadId: string;
+  /** In the order the parts finished, which with parallel uploads is not their own order. */
   parts: Array<{ PartNumber: number; ETag: string }>;
+  /** Cancels the part uploads still running when the upload is aborted. */
+  abort: AbortController;
   /** Buffered chunks waiting to reach partSize. Avoids repeated full-buffer copies. */
   bufferChunks: Uint8Array[];
   bufferSize: number;
@@ -167,6 +171,7 @@ export class S3Storage implements StorageBackend {
     this.multipartSessions.set(id, {
       uploadId: result.UploadId,
       parts: [],
+      abort: new AbortController(),
       bufferChunks: [],
       bufferSize: 0,
       partNumber: 1,
@@ -245,6 +250,7 @@ export class S3Storage implements StorageBackend {
             PartNumber: part.partNumber,
             Body: part.data,
           }),
+          { abortSignal: session.abort.signal },
         )
         .then((result) => {
           session.parts.push({
@@ -276,7 +282,8 @@ export class S3Storage implements StorageBackend {
 
   /**
    * Finalize the multipart upload.
-   * Flushes remaining buffer as the last part and completes the upload.
+   * Flushes remaining buffer as the last part and completes the upload. A finalize that fails
+   * aborts the multipart upload itself, so its parts are not left in the bucket.
    */
   async finalizeChunkedUpload(id: string): Promise<void> {
     const session = this.multipartSessions.get(id);
@@ -309,6 +316,7 @@ export class S3Storage implements StorageBackend {
             PartNumber: session.partNumber,
             Body: remaining,
           }),
+          { abortSignal: session.abort.signal },
         );
 
         session.parts.push({
@@ -317,17 +325,23 @@ export class S3Storage implements StorageBackend {
         });
       }
 
-      // Complete the multipart upload
+      // S3 refuses a list that is not in ascending order (InvalidPartOrder), and parallel
+      // parts finish in any order: one that is retried or simply slower finishes after the
+      // parts behind it.
+      const parts = [...session.parts].sort((a, b) => a.PartNumber - b.PartNumber);
       await this.client.send(
         new CompleteMultipartUploadCommand({
           Bucket: this.bucket,
           Key: this.key(id),
           UploadId: session.uploadId,
-          MultipartUpload: { Parts: session.parts },
+          MultipartUpload: { Parts: parts },
         }),
       );
-    } finally {
       this.multipartSessions.delete(id);
+    } catch (err) {
+      // The caller's abortChunkedUpload finds no session after this, so the abort happens here.
+      await this.abortSession(id, session);
+      throw err;
     }
   }
 
@@ -496,19 +510,29 @@ export class S3Storage implements StorageBackend {
   /** Abort a multipart upload in progress. */
   async abortChunkedUpload(id: string): Promise<void> {
     const session = this.multipartSessions.get(id);
-    if (session) {
-      try {
-        await this.client.send(
-          new AbortMultipartUploadCommand({
-            Bucket: this.bucket,
-            Key: this.key(id),
-            UploadId: session.uploadId,
-          }),
-        );
-      } catch {
-        // Best-effort abort
-      }
-      this.multipartSessions.delete(id);
+    if (session) await this.abortSession(id, session);
+  }
+
+  /**
+   * Cancels the parts still being uploaded, waits until none is in flight, then aborts the
+   * multipart upload. A part that is still uploading while the abort runs may be stored after
+   * it, and its bytes would be billed until a lifecycle rule removes them.
+   */
+  private async abortSession(id: string, session: MultipartSession): Promise<void> {
+    this.multipartSessions.delete(id);
+    session.abort.abort();
+    await Promise.allSettled(session.activeUploads);
+    try {
+      await this.client.send(
+        new AbortMultipartUploadCommand({
+          Bucket: this.bucket,
+          Key: this.key(id),
+          UploadId: session.uploadId,
+        }),
+      );
+    } catch (err) {
+      // Best effort. A lifecycle rule for incomplete multipart uploads catches what is left.
+      console.warn("[s3] Aborting a multipart upload failed:", describeError(err));
     }
   }
 }

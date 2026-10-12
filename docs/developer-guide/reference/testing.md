@@ -170,6 +170,27 @@ E2E_LARGE_SIZE=314572800 pnpm test:e2e:large
 
 `pnpm test:e2e` leaves it out. The run needs about 11 GB of free disk, since the server holds the ciphertext while the download arrives beside it, and checks that before it writes anything. It keeps everything on the disk of the checkout, the source in `e2e/test-results/` and the server data and the download in `e2e/.large-files/`, never in the temp folder, which some systems keep in memory. A finished run leaves none of it behind.
 
+### Measuring uploads and downloads
+
+The tests check that a transfer works, `e2e/bench/` measures how well. `transfer.mjs` sends a file up through the real app in a real browser and downloads it again, against the built server, and records the speed of every hop over time: what the upload worker reports and the UI shows, what reaches the server, and with S3 what the server sends to the bucket and the browser downloads from it. Two plain TCP relays count those bytes without changing them. It also samples the CPU and memory of the server and the browser, compares the download with the source, and with S3 lists the multipart uploads a run left in the bucket. It is not a test and runs in no CI job.
+
+```bash
+# Build first
+pnpm test:e2e:build
+
+# 2 GiB up and down in Firefox against a local SeaweedFS
+pnpm --filter @skysend/e2e bench --browser firefox --storage s3 --size 2048
+
+# The timeline of the last run, every 500 ms
+node e2e/bench/timeline.mjs
+
+# A slower network: 1 Gbit/s to the server, 400 Mbit/s with 30 ms round trip to the bucket
+sudo e2e/bench/shape.sh apply 1gbit 5ms 400mbit 15ms
+sudo e2e/bench/shape.sh clear
+```
+
+`pipeline.mjs` measures the stages of the browser alone, in a Web Worker like the app's: reading the file, `createEncryptStream`, raw AES-GCM and sending over a WebSocket to a sink that throws the bytes away. The stage that is slowest alone is the one that caps an upload. `e2e/bench/README.md` lists every option.
+
 ### Links from older releases
 
 An update must not break the links an instance handed out before it. `compat.spec.ts` checks that for every release with a snapshot in `e2e/compat/snapshots/<version>/`:
