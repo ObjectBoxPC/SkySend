@@ -253,8 +253,13 @@ export function createWsUploadHandler<M>(deps: WsUploadDeps, target: WsUploadTar
         // Do NOT re-throw: that would create an unhandled rejection
         // and crash Node.js when the writePromise chain continues
         // after an abort.
-        if (session.stage !== "closed") {
-          session.backpressureError = err instanceof Error ? err : new Error(String(err));
+        if (session.stage === "closed") return;
+        session.backpressureError = err instanceof Error ? err : new Error(String(err));
+        // A storage that failed takes nothing more, so the sender is stopped now instead of
+        // sending the rest of its upload first, which over a broken bucket can be gigabytes.
+        if (session.stage === "receiving") {
+          console.error("[upload-ws] Writing to storage failed:", describeError(err));
+          fail(ws, session, "Storage write failed");
         }
       });
   }
@@ -382,7 +387,7 @@ export function createWsUploadHandler<M>(deps: WsUploadDeps, target: WsUploadTar
 
           const id = randomUUID();
           try {
-            await storage.createEmpty(id);
+            await storage.createEmpty(id, opened.contentLength);
           } catch (err) {
             console.error("[upload-ws] Storage init failed:", describeError(err));
             target.abandon?.(opened.meta);

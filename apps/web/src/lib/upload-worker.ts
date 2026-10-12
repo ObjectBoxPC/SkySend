@@ -747,8 +747,15 @@ async function uploadViaWebSocket(opts: WsUploadOpts): Promise<{ id: string; hol
   const { ws, init, finalize, wsError, encryptedStream, encryptedSize, speedLimit, post } = opts;
 
   const FRAME_SIZE = 256 * 1024; // 256 KB per WebSocket frame
-  const HIGH_WATER = 8 * 1024 * 1024; // pause sending above this
-  const LOW_WATER = 2 * 1024 * 1024;
+  // Sending pauses above HIGH_WATER queued in the socket and goes on below LOW_WATER. The
+  // socket is checked every DRAIN_POLL_MS while it drains, since a WebSocket has no event for
+  // that. Checked every 20 ms against 2 MiB, it ran dry between two checks at 100 MiB/s.
+  const HIGH_WATER = 16 * 1024 * 1024;
+  const LOW_WATER = 8 * 1024 * 1024;
+  const DRAIN_POLL_MS = 4;
+  // Progress goes to the page at most this often. One message per frame, more than a thousand
+  // a second on a fast link, left the page behind, so the bar lagged and then jumped.
+  const PROGRESS_INTERVAL_MS = 100;
   const READY_TIMEOUT_MS = 10_000;
   const DONE_TIMEOUT_MS = 5 * 60_000;
 
@@ -827,20 +834,30 @@ async function uploadViaWebSocket(opts: WsUploadOpts): Promise<{ id: string; hol
 
     // Stream encrypted data in small frames with backpressure.
     const reader = encryptedStream.getReader();
+    /** Bytes handed to the socket. What it has not sent yet is in ws.bufferedAmount. */
     let loaded = 0;
-    let carry: Uint8Array | null = null;
+    let lastProgressAt = 0;
     const sendStartedAt = Date.now();
 
-    const drain = async () => {
-      while (ws.bufferedAmount > LOW_WATER) {
+    /** Reports what the socket has really sent, not what waits in its buffer. */
+    const reportProgress = (force: boolean) => {
+      const now = Date.now();
+      if (!force && now - lastProgressAt < PROGRESS_INTERVAL_MS) return;
+      lastProgressAt = now;
+      post({ type: "progress", loaded: Math.max(0, loaded - ws.bufferedAmount), total: encryptedSize });
+    };
+
+    const drain = async (below: number) => {
+      while (ws.bufferedAmount > below) {
         if (fatalError) throw fatalError;
-        await new Promise((r) => setTimeout(r, 20));
+        await new Promise((r) => setTimeout(r, DRAIN_POLL_MS));
+        reportProgress(false);
       }
     };
 
-    const sendFrame = async (frame: Uint8Array) => {
+    const sendFrame = async (frame: Uint8Array<ArrayBuffer>) => {
       if (fatalError) throw fatalError;
-      if (ws.bufferedAmount > HIGH_WATER) await drain();
+      if (ws.bufferedAmount > HIGH_WATER) await drain(LOW_WATER);
 
       // Speed limit: pause if sending faster than the server allows.
       if (speedLimit > 0 && loaded > 0) {
@@ -852,42 +869,37 @@ async function uploadViaWebSocket(opts: WsUploadOpts): Promise<{ id: string; hol
         }
       }
 
-      // Copy into a fresh ArrayBuffer to satisfy strict BufferSource typing
-      // (the source may be a view over a SharedArrayBuffer-typed buffer).
-      const frameCopy = new Uint8Array(frame.byteLength);
-      frameCopy.set(frame);
-      ws.send(frameCopy.buffer);
+      ws.send(frame);
       loaded += frame.byteLength;
-      post({ type: "progress", loaded, total: encryptedSize });
+      reportProgress(false);
     };
 
+    // Every frame is filled once, straight from the records, into a buffer of its own. Joining
+    // the rest of the last record with the next one copied most bytes three times.
+    let frame = new Uint8Array(FRAME_SIZE);
+    let filled = 0;
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
 
-      let buf: Uint8Array;
-      if (carry && carry.byteLength > 0) {
-        buf = new Uint8Array(carry.byteLength + value.byteLength);
-        buf.set(carry);
-        buf.set(value, carry.byteLength);
-        carry = null;
-      } else {
-        buf = value;
-      }
-
       let offset = 0;
-      while (buf.byteLength - offset >= FRAME_SIZE) {
-        await sendFrame(buf.subarray(offset, offset + FRAME_SIZE));
-        offset += FRAME_SIZE;
-      }
-      if (offset < buf.byteLength) {
-        carry = buf.slice(offset);
+      while (offset < value.byteLength) {
+        const take = Math.min(FRAME_SIZE - filled, value.byteLength - offset);
+        frame.set(value.subarray(offset, offset + take), filled);
+        filled += take;
+        offset += take;
+        if (filled === FRAME_SIZE) {
+          await sendFrame(frame);
+          frame = new Uint8Array(FRAME_SIZE);
+          filled = 0;
+        }
       }
     }
-    if (carry && carry.byteLength > 0) {
-      await sendFrame(carry);
-      carry = null;
-    }
+    if (filled > 0) await sendFrame(frame.subarray(0, filled));
+
+    // The bar follows the socket until it has sent everything.
+    await drain(0);
+    reportProgress(true);
 
     if (fatalError) throw fatalError;
 

@@ -192,15 +192,95 @@ async function postStream(stream, size, { inFlight = 3, chunk = 10 * MIB, settle
   return { mibPerSecond: +(size / MIB / ((performance.now() - start) / 1000)).toFixed(1), chunks: index };
 }
 
+/** Cuts a stream into views of at most 64 KiB, the chunks Firefox reads a file in. */
+function rechunk(stream) {
+  return stream.pipeThrough(new TransformStream({
+    transform(chunk, controller) {
+      for (let o = 0; o < chunk.byteLength; o += 65536) controller.enqueue(chunk.subarray(o, o + 65536));
+    },
+  }));
+}
+
+/**
+ * A reworked send loop to compare against wsSend: frames are assembled once into a fresh
+ * buffer instead of through a carry that is copied for every record, the socket is checked
+ * every "poll" ms against larger water marks, an optional queue of "ahead" bytes lets the
+ * encryption run on while the socket drains, and progress is posted at most every
+ * "progressMs" as the bytes the socket really sent.
+ */
+async function wsSend2(stream, size, { frame, high, low, poll, ahead = 0, progressMs = 0, url }) {
+  const ws = new WebSocket(url);
+  ws.binaryType = "arraybuffer";
+  await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = reject; });
+  const source = ahead > 0
+    ? stream.pipeThrough(new TransformStream({}, undefined, new ByteLengthQueuingStrategy({ highWaterMark: ahead })))
+    : stream;
+  const reader = source.getReader();
+  let queued = 0, posts = 0, lastPost = 0, drains = 0, drainMs = 0;
+  let out = new Uint8Array(frame);
+  let fill = 0;
+  const start = performance.now();
+  const report = (force) => {
+    const now = performance.now();
+    if (!force && now - lastPost < progressMs) return;
+    lastPost = now;
+    posts++;
+    self.postMessage({ type: "progress", loaded: Math.max(0, queued - ws.bufferedAmount), total: size });
+  };
+  const send = async (bytes) => {
+    if (ws.bufferedAmount > high) {
+      drains++;
+      const t = performance.now();
+      while (ws.bufferedAmount > low) await new Promise((r) => setTimeout(r, poll));
+      drainMs += performance.now() - t;
+    }
+    ws.send(bytes.buffer.byteLength === bytes.byteLength ? bytes.buffer : bytes.slice().buffer);
+    queued += bytes.byteLength;
+    report(false);
+  };
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    let offset = 0;
+    while (offset < value.byteLength) {
+      const take = Math.min(frame - fill, value.byteLength - offset);
+      out.set(value.subarray(offset, offset + take), fill);
+      fill += take;
+      offset += take;
+      if (fill === frame) {
+        await send(out);
+        out = new Uint8Array(frame);
+        fill = 0;
+      }
+    }
+  }
+  if (fill > 0) await send(out.subarray(0, fill));
+  const sent = performance.now();
+  await new Promise((resolve) => { ws.onmessage = resolve; ws.send("done"); });
+  const end = performance.now();
+  report(true);
+  ws.close();
+  return {
+    mibPerSecond: +(size / MIB / ((end - start) / 1000)).toFixed(1),
+    sendSeconds: +((sent - start) / 1000).toFixed(2),
+    flushSeconds: +((end - sent) / 1000).toFixed(2),
+    drains, drainMs: Math.round(drainMs), progressPosts: posts,
+  };
+}
+
 self.onmessage = async ({ data: { name, file, params } }) => {
   try {
     let result;
     if (name === "read") result = await drain(file.stream(), file.size);
     else if (name === "encrypt") result = await drain(file.stream().pipeThrough(createEncryptStream(await fileKey())), file.size);
+    else if (name === "encrypt-64k") result = await drain(rechunk(file.stream()).pipeThrough(createEncryptStream(await fileKey())), file.size);
+    else if (name === "ws-encrypt-64k") result = await wsSend(rechunk(file.stream()).pipeThrough(createEncryptStream(await fileKey())), file.size, params);
     else if (name === "raw") result = await rawEncrypt(file.size, params.inFlight);
     else if (name === "ws-plain") result = await wsSend(file.stream(), file.size, params);
     else if (name === "post-encrypt") result = await postStream(file.stream().pipeThrough(createEncryptStream(await fileKey())), file.size, params);
     else if (name === "post-plain") result = await postStream(file.stream(), file.size, params);
+    else if (name === "ws2-plain") result = await wsSend2(file.stream(), file.size, params);
+    else if (name === "ws2-encrypt") result = await wsSend2(file.stream().pipeThrough(createEncryptStream(await fileKey())), file.size, params);
     else if (name === "post") result = await posts(params.total, params);
     else if (name === "ws-encrypt") result = await wsSend(file.stream().pipeThrough(createEncryptStream(await fileKey())), file.size, params);
     self.postMessage({ type: "result", result });
@@ -328,6 +408,28 @@ const plan = [
   ["ws-plain", { ...CURRENT, high: 32 * 1024 * 1024, low: 16 * 1024 * 1024 }],
   ["ws-plain", { ...CURRENT, frame: 1024 * 1024 - 64 }],
   ["ws-encrypt", CURRENT],
+  ["ws2-encrypt", { ...CURRENT }],
+  ["ws2-encrypt", { ...CURRENT, poll: 4 }],
+  ["ws2-encrypt", { ...CURRENT, poll: 4, high: 16 * 1024 * 1024, low: 8 * 1024 * 1024 }],
+  ["ws2-encrypt", { ...CURRENT, poll: 4, high: 32 * 1024 * 1024, low: 16 * 1024 * 1024 }],
+  [
+    "ws2-encrypt",
+    { ...CURRENT, poll: 4, high: 16 * 1024 * 1024, low: 8 * 1024 * 1024, ahead: 8 * 1024 * 1024 },
+  ],
+  [
+    "ws2-encrypt",
+    {
+      ...CURRENT,
+      poll: 4,
+      high: 16 * 1024 * 1024,
+      low: 8 * 1024 * 1024,
+      ahead: 8 * 1024 * 1024,
+      progressMs: 100,
+    },
+  ],
+  ["ws2-plain", { ...CURRENT, poll: 4, high: 16 * 1024 * 1024, low: 8 * 1024 * 1024 }],
+  ["encrypt-64k", {}],
+  ["ws-encrypt-64k", CURRENT],
   ["post-plain", {}],
   ["post-encrypt", {}],
   ["post", { body: "blob", total: 3 * 1024 * 1024 * 1024 }],

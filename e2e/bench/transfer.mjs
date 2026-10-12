@@ -48,6 +48,9 @@ const { values: opts } = parseArgs({
     "no-download": { type: "boolean", default: false },
     profile: { type: "boolean", default: false },
     port: { type: "string", default: "3900" },
+    // "nginx" puts the Nginx of the reverse proxy guide in front, with TLS and HTTP/2, the
+    // way an instance runs. The browser then opens https://localhost.
+    proxy: { type: "string" },
     // Chromium defaults to the full browser in its new headless mode, which is what people
     // run, not the headless shell the end-to-end tests use. "shell" picks the shell.
     channel: { type: "string" },
@@ -69,7 +72,9 @@ if (!["ws", "http"].includes(opts.transport)) throw new Error("--transport must 
 const SIZE = Number(opts.size) * MIB;
 const BASE = Number(opts.port);
 const PORTS = { proxyA: BASE, server: BASE + 1, proxyB: BASE + 2, s3: BASE + 3 };
-const ORIGIN = `http://127.0.0.1:${PORTS.proxyA}`;
+if (opts.proxy && opts.proxy !== "nginx") throw new Error("--proxy must be nginx");
+const TLS_PORT = BASE + 6;
+const ORIGIN = opts.proxy ? `https://localhost:${TLS_PORT}` : `http://127.0.0.1:${PORTS.proxyA}`;
 const BUCKET = "skysend-bench";
 const label =
   opts.label ??
@@ -203,6 +208,7 @@ function startServer(extraEnv) {
     HOST: "127.0.0.1",
     PORT: String(PORTS.server),
     BASE_URL: ORIGIN,
+    ...(opts.proxy ? { TRUST_PROXY: "true" } : {}),
     DATA_DIR: dataDir,
     FILE_MAX_SIZE: "64GB",
     FILE_UPLOAD_WS: opts.transport === "ws" ? "true" : "false",
@@ -405,6 +411,34 @@ const RECORDER = () => {
   };
 };
 
+/** Nginx with the server block of the reverse proxy guide, in Docker, through e2e/scripts. */
+async function startNginx() {
+  const child = spawn(
+    process.execPath,
+    [join(ROOT, "e2e", "scripts", "nginx.mjs"), "bench", String(TLS_PORT), String(PORTS.proxyA)],
+    { stdio: "ignore" },
+  );
+  const exited = new Promise((resolve) => child.once("exit", resolve));
+  cleanups.push(async () => {
+    child.kill("SIGTERM");
+    await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 10_000))]);
+  });
+  const https = await import("node:https");
+  for (let attempt = 0; attempt < 240; attempt++) {
+    const up = await new Promise((resolve) => {
+      https
+        .get(`${ORIGIN}/api/health`, { rejectUnauthorized: false }, (res) => {
+          res.resume();
+          resolve(res.statusCode === 200);
+        })
+        .on("error", () => resolve(false));
+    });
+    if (up) return;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error("Nginx did not come up");
+}
+
 /** Multipart uploads still open in the bench bucket, and how many parts they hold. */
 async function bucketLeftovers(store) {
   const s3 = createRequire(join(ROOT, "apps", "server", "package.json"))("@aws-sdk/client-s3");
@@ -435,7 +469,11 @@ async function bucketLeftovers(store) {
 /** One upload and, unless --no-download, its download, with every step timed. */
 async function singleTransfer(browser, source, result, sampler, counters) {
   // ── Upload ──────────────────────────────────────
-  const sender = await browser.newContext({ locale: "en-US", acceptDownloads: true });
+  const sender = await browser.newContext({
+    locale: "en-US",
+    acceptDownloads: true,
+    ignoreHTTPSErrors: true,
+  });
   await sender.addInitScript(RECORDER);
   const page = await sender.newPage();
   const consoleLines = [];
@@ -507,10 +545,16 @@ async function singleTransfer(browser, source, result, sampler, counters) {
   // The progress the worker reported, as [time, bytes], for timeline.mjs.
   result.upload.progress = progress.map((e) => [e.t, e.loaded]);
   result.upload.wireBytes = { a: counters.a.up, b: counters.b?.up };
+  // TCP connections opened so far, to the server and to the bucket.
+  result.upload.connections = { a: counters.a.connections, b: counters.b?.connections };
 
   // ── Download ────────────────────────────────────
   if (!opts["no-download"]) {
-    const recipient = await browser.newContext({ locale: "en-US", acceptDownloads: true });
+    const recipient = await browser.newContext({
+      locale: "en-US",
+      acceptDownloads: true,
+      ignoreHTTPSErrors: true,
+    });
     const page2 = await recipient.newPage();
     const tiers = [];
     page2.on("console", (message) => {
@@ -563,7 +607,7 @@ async function parallelUploads(browser, source, count, result, sampler) {
   const start = Date.now();
   const ends = await Promise.all(
     Array.from({ length: count }, async () => {
-      const context = await browser.newContext({ locale: "en-US" });
+      const context = await browser.newContext({ locale: "en-US", ignoreHTTPSErrors: true });
       const page = await context.newPage();
       await page.goto(`${ORIGIN}/`);
       await page.locator('input[type="file"]:not([webkitdirectory])').setInputFiles(source.path);
@@ -614,6 +658,7 @@ async function main() {
   serverForErrors = server;
   counters.a = await countingProxy(PORTS.proxyA, "127.0.0.1", PORTS.server);
   await waitFor(`http://127.0.0.1:${PORTS.server}/api/health`, "The server");
+  if (opts.proxy) await startNginx();
 
   const downloads = join(WORK, "downloads");
   rmSync(downloads, { recursive: true, force: true });
@@ -622,6 +667,9 @@ async function main() {
   const channel = opts.channel ?? (opts.browser === "chromium" ? "chromium" : undefined);
   const browser = await engine.launch({
     downloadsPath: downloads,
+    // Chromium refuses a Service Worker from an origin with a certificate error unless the
+    // whole browser ignores such errors, see e2e/CLAUDE.md.
+    ...(opts.proxy && opts.browser === "chromium" ? { args: ["--ignore-certificate-errors"] } : {}),
     ...(channel && channel !== "shell" ? { channel } : {}),
   });
   cleanups.push(() => browser.close());

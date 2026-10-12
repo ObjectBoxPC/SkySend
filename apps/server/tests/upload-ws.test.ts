@@ -54,8 +54,8 @@ const DEFAULT_CONFIG = {
   STORAGE_BACKEND: "filesystem" as const,
   S3_FORCE_PATH_STYLE: false,
   S3_PRESIGNED_EXPIRY: 300,
-  S3_PART_SIZE: 25 * 1024 * 1024,
-  S3_CONCURRENCY: 4,
+  S3_PART_SIZE: 8 * 1024 * 1024,
+  S3_CONCURRENCY: 8,
 };
 
 /** Build a valid upload-init payload. */
@@ -197,6 +197,28 @@ describe("upload-ws route", () => {
     expect(dbCtx.db.select().from(uploads).all()).toHaveLength(0);
     const { readdirSync } = await import("node:fs");
     expect(readdirSync(storageCtx.tempDir).filter((name) => name.endsWith(".bin"))).toHaveLength(0);
+  });
+
+  it("ends the upload as soon as a write to storage fails, without waiting for finalize", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { events } = await bootstrap();
+    const fake = createFakeWs();
+    const size = 8 * 1024 * 1024;
+    await events.onMessage!(
+      msgEvent(JSON.stringify({ type: "init", headers: buildHeaders({ contentLength: String(size) }) })),
+      fake.ws,
+    );
+    vi.spyOn(storage, "appendChunk").mockRejectedValueOnce(new Error("bucket gone"));
+    // Half of the upload fills the buffer past its flush threshold.
+    await events.onMessage!(msgEvent(new Uint8Array(size / 2).buffer), fake.ws);
+
+    await vi.waitFor(() => expect(fake.closed?.code).toBe(1011));
+    expect(fake.lastJson()).toMatchObject({ type: "error", message: "Storage write failed" });
+    expect(dbCtx.db.select().from(uploads).all()).toHaveLength(0);
+    const { readdirSync } = await import("node:fs");
+    await vi.waitFor(() =>
+      expect(readdirSync(storageCtx.tempDir).filter((name) => name.endsWith(".bin"))).toHaveLength(0),
+    );
   });
 
   it("rejects invalid init payload", async () => {

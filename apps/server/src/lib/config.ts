@@ -399,13 +399,13 @@ const configSchema = z.object({
 
   S3_PART_SIZE: z
     .string()
-    .default("25MB")
+    .default("8MB")
     .transform((v) => parseByteSize(v))
     .pipe(z.number().int().min(5 * 1024 * 1024, "S3_PART_SIZE must be at least 5MB (S3 minimum)").max(5 * 1024 * 1024 * 1024, "S3_PART_SIZE must be at most 5GB")),
 
   S3_CONCURRENCY: z
     .string()
-    .default("4")
+    .default("8")
     .transform((v) => parseInt(v, 10))
     .pipe(z.number().int().min(1).max(16, "S3_CONCURRENCY must be between 1 and 16")),
 

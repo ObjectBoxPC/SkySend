@@ -582,11 +582,11 @@ All file-related variables have been renamed with a `FILE_` prefix (e.g. `MAX_FI
 | Property | Value |
 | --- | --- |
 | Required | No |
-| Type | Byte size (e.g. `25MB`, `50MB`) |
-| Default | `25MB` |
+| Type | Byte size (e.g. `8MB`, `25MB`) |
+| Default | `8MB` |
 | Minimum | `5MB` |
 | Maximum | `5GB` |
-| Description | Size of each S3 multipart upload part. Larger values reduce the number of API round-trips but increase memory usage per upload. The S3 protocol requires at least 5MB per part (except the final part). Increase this if you have high bandwidth and want faster uploads. |
+| Description | Size of each S3 multipart upload part. The server frees the memory of a part only once the bucket has stored all of it, so the sender moves on in steps of one part: smaller parts keep an upload steadier and use less memory, larger ones take fewer requests. An upload whose declared size would need more than 10,000 parts, the most S3 accepts, uses larger parts on its own. An upload that fits into one part is stored with a single request. The S3 protocol requires at least 5MB per part (except the final part). A server holds up to `S3_CONCURRENCY` + 2 parts per upload in memory. |
 
 ### S3_CONCURRENCY
 
@@ -594,9 +594,9 @@ All file-related variables have been renamed with a `FILE_` prefix (e.g. `MAX_FI
 | --- | --- |
 | Required | No |
 | Type | Integer |
-| Default | `4` |
+| Default | `8` |
 | Range | 1-16 |
-| Description | Number of S3 multipart upload parts uploaded in parallel. Higher values improve throughput by overlapping network transfers, but increase memory and bandwidth usage. Good starting values: `4` for most setups, `8` for high-bandwidth connections. |
+| Description | Number of S3 multipart upload parts uploaded in parallel per upload. Higher values improve throughput by overlapping network transfers, which matters most on a connection with a long round trip to the bucket, but increase memory and bandwidth usage. |
 
 ### PUID
 

@@ -19,8 +19,13 @@ import type { createReadStream } from "node:fs";
 import { describeError } from "../lib/log-error.js";
 import type { StorageBackend } from "./types.js";
 
+const MIB = 1024 * 1024;
+
 /** Minimum part size for S3 multipart uploads (5 MB - S3 requirement for non-final parts). */
-const MIN_PART_SIZE = 5 * 1024 * 1024;
+const MIN_PART_SIZE = 5 * MIB;
+
+/** Most parts S3 accepts in one multipart upload. */
+const MAX_PARTS = 10_000;
 
 export interface S3StorageConfig {
   bucket: string;
@@ -35,7 +40,13 @@ export interface S3StorageConfig {
 }
 
 interface MultipartSession {
-  uploadId: string;
+  /** Size of every part but the last, fixed for the whole upload. */
+  partSize: number;
+  /**
+   * The multipart upload, null until it is started: for an upload that fits into one part it
+   * never is, and finalize stores it with a single PutObject.
+   */
+  uploadId: Promise<string> | null;
   /** In the order the parts finished, which with parallel uploads is not their own order. */
   parts: Array<{ PartNumber: number; ETag: string }>;
   /** Cancels the part uploads still running when the upload is aborted. */
@@ -153,23 +164,23 @@ export class S3Storage implements StorageBackend {
   }
 
   /**
-   * Create a multipart upload session for chunked uploads.
-   * S3 requires at least 5MB per part (except the last part).
+   * Opens an upload session. `size`, the declared size of the upload, sets the part size and
+   * the way the upload is stored: one that fits into a single part is stored with one
+   * PutObject at finalize, which takes one request instead of three and leaves nothing in the
+   * bucket when it is abandoned. A larger one starts its multipart upload now, in the
+   * background, so the first part does not wait for it.
    */
-  async createEmpty(id: string): Promise<void> {
-    const result = await this.client.send(
-      new CreateMultipartUploadCommand({
-        Bucket: this.bucket,
-        Key: this.key(id),
-      }),
-    );
-
-    if (!result.UploadId) {
-      throw new Error("S3 CreateMultipartUpload did not return an UploadId");
-    }
-
-    this.multipartSessions.set(id, {
-      uploadId: result.UploadId,
+  async createEmpty(id: string, size?: number): Promise<void> {
+    const key = this.key(id);
+    // S3 caps a multipart upload at MAX_PARTS parts, so a large upload takes larger parts.
+    // Every part but the last has this size, which R2 requires.
+    const partSize =
+      size === undefined
+        ? this.partSize
+        : Math.max(this.partSize, Math.ceil(size / MAX_PARTS / MIB) * MIB);
+    const session: MultipartSession = {
+      partSize,
+      uploadId: null,
       parts: [],
       abort: new AbortController(),
       bufferChunks: [],
@@ -177,15 +188,85 @@ export class S3Storage implements StorageBackend {
       partNumber: 1,
       activeUploads: new Set(),
       uploadError: null,
-    });
+    };
+    if (size === undefined || size > partSize) this.createMultipartUpload(key, session);
+    this.multipartSessions.set(id, session);
+  }
+
+  /**
+   * Starts the multipart upload of a session once. Its error reaches the parts that wait for
+   * it. Not cancelled by an abort, so an upload that S3 created is always known and aborted.
+   */
+  private createMultipartUpload(key: string, session: MultipartSession): Promise<string> {
+    session.uploadId ??= this.client
+      .send(new CreateMultipartUploadCommand({ Bucket: this.bucket, Key: key }))
+      .then((result) => {
+        if (!result.UploadId) {
+          throw new Error("S3 CreateMultipartUpload did not return an UploadId");
+        }
+        return result.UploadId;
+      });
+    // Handled where it is awaited. This only keeps a failure before then from going unhandled.
+    session.uploadId.catch(() => {});
+    return session.uploadId;
+  }
+
+  /** Uploads one part in the background, tracked in activeUploads. */
+  private startPart(id: string, session: MultipartSession, data: Uint8Array, partNumber: number) {
+    const key = this.key(id);
+    const p = this.createMultipartUpload(key, session)
+      .then((uploadId) =>
+        this.client.send(
+          new UploadPartCommand({
+            Bucket: this.bucket,
+            Key: key,
+            UploadId: uploadId,
+            PartNumber: partNumber,
+            Body: data,
+          }),
+          { abortSignal: session.abort.signal },
+        ),
+      )
+      .then((result) => {
+        session.parts.push({ PartNumber: partNumber, ETag: result.ETag! });
+      })
+      .catch((err) => {
+        if (!session.uploadError) {
+          session.uploadError = err instanceof Error ? err : new Error(String(err));
+        }
+      })
+      .finally(() => {
+        session.activeUploads.delete(p);
+      });
+    session.activeUploads.add(p);
+  }
+
+  /** Takes `size` bytes from the front of the buffer of a session, copied into one array. */
+  private takeFromBuffer(session: MultipartSession, size: number): Uint8Array {
+    const data = new Uint8Array(size);
+    let offset = 0;
+    while (offset < size) {
+      const chunk = session.bufferChunks[0]!;
+      const needed = size - offset;
+      if (chunk.byteLength <= needed) {
+        data.set(chunk, offset);
+        offset += chunk.byteLength;
+        session.bufferChunks.shift();
+      } else {
+        data.set(chunk.subarray(0, needed), offset);
+        session.bufferChunks[0] = chunk.subarray(needed);
+        offset += needed;
+      }
+    }
+    session.bufferSize -= size;
+    return data;
   }
 
   /**
    * Append a chunk to a multipart upload session.
-   * Buffers data until the target part size is reached, then uploads parts
-   * to S3 concurrently. Applies smooth backpressure by waiting for one
-   * S3 upload to complete when all concurrency slots are full, instead of
-   * draining the entire pipeline.
+   * Buffers data until the part size is reached, then uploads parts to S3 concurrently.
+   * Applies backpressure by waiting for one part to complete when all concurrency slots are
+   * full, so the caller slows down to the speed of the bucket.
    */
   async appendChunk(id: string, stream: ReadableStream<Uint8Array>): Promise<number> {
     const session = this.multipartSessions.get(id);
@@ -208,70 +289,18 @@ export class S3Storage implements StorageBackend {
       bytesRead += value.byteLength;
     }
 
-    // Collect parts to upload (>= partSize each)
-    const partsToUpload: Array<{ data: Uint8Array; partNumber: number }> = [];
-    while (session.bufferSize >= this.partSize) {
-      // Concatenate only as much as needed for one part
-      const partData = new Uint8Array(this.partSize);
-      let offset = 0;
-      while (offset < this.partSize) {
-        const chunk = session.bufferChunks[0]!;
-        const needed = this.partSize - offset;
-        if (chunk.byteLength <= needed) {
-          partData.set(chunk, offset);
-          offset += chunk.byteLength;
-          session.bufferChunks.shift();
-        } else {
-          partData.set(chunk.subarray(0, needed), offset);
-          session.bufferChunks[0] = chunk.subarray(needed);
-          offset += needed;
-        }
-      }
-      session.bufferSize -= this.partSize;
-      partsToUpload.push({ data: partData, partNumber: session.partNumber });
-      session.partNumber++;
-    }
-
-    // Upload each part concurrently with a semaphore
-    for (const part of partsToUpload) {
-      // Wait for a free slot if all are in use (smooth backpressure)
+    while (session.bufferSize >= session.partSize) {
+      // Wait for a free slot if all are in use
       while (session.activeUploads.size >= this.concurrency) {
         await Promise.race(session.activeUploads);
         if (session.uploadError) throw session.uploadError;
       }
-
-      // Start this part upload (fire-and-forget, tracked via Set)
-      const p = this.client
-        .send(
-          new UploadPartCommand({
-            Bucket: this.bucket,
-            Key: this.key(id),
-            UploadId: session.uploadId,
-            PartNumber: part.partNumber,
-            Body: part.data,
-          }),
-          { abortSignal: session.abort.signal },
-        )
-        .then((result) => {
-          session.parts.push({
-            PartNumber: part.partNumber,
-            ETag: result.ETag!,
-          });
-        })
-        .catch((err) => {
-          if (!session.uploadError) {
-            session.uploadError =
-              err instanceof Error ? err : new Error(String(err));
-          }
-        })
-        .finally(() => {
-          session.activeUploads.delete(p);
-        });
-      session.activeUploads.add(p);
+      const data = this.takeFromBuffer(session, session.partSize);
+      this.startPart(id, session, data, session.partNumber++);
     }
 
-    // Smooth backpressure: if all slots are full, wait for ONE to finish.
-    // This delays the HTTP response, throttling the client to ~S3 speed.
+    // If all slots are full, wait for ONE to finish. This delays the caller, which throttles
+    // the client to the speed of the bucket.
     if (session.activeUploads.size >= this.concurrency) {
       await Promise.race(session.activeUploads);
       if (session.uploadError) throw session.uploadError;
@@ -281,9 +310,10 @@ export class S3Storage implements StorageBackend {
   }
 
   /**
-   * Finalize the multipart upload.
-   * Flushes remaining buffer as the last part and completes the upload. A finalize that fails
-   * aborts the multipart upload itself, so its parts are not left in the bucket.
+   * Finalize the upload: one PutObject for an upload that never filled a part, otherwise the
+   * rest goes out as the last part beside the parts still in flight and the multipart upload is
+   * completed. A finalize that fails aborts the upload itself, so no parts are left in the
+   * bucket.
    */
   async finalizeChunkedUpload(id: string): Promise<void> {
     const session = this.multipartSessions.get(id);
@@ -292,38 +322,28 @@ export class S3Storage implements StorageBackend {
     }
 
     try {
-      // Wait for all active S3 part uploads to complete
-      await Promise.all(session.activeUploads);
       if (session.uploadError) throw session.uploadError;
 
-      // Upload remaining buffer as the last part (can be < 5MB)
-      if (session.bufferSize > 0) {
-        // Concatenate remaining buffer chunks into a single Uint8Array
-        const remaining = new Uint8Array(session.bufferSize);
-        let offset = 0;
-        for (const chunk of session.bufferChunks) {
-          remaining.set(chunk, offset);
-          offset += chunk.byteLength;
-        }
-        session.bufferChunks.length = 0;
-        session.bufferSize = 0;
-
-        const result = await this.client.send(
-          new UploadPartCommand({
+      if (session.uploadId === null) {
+        await this.client.send(
+          new PutObjectCommand({
             Bucket: this.bucket,
             Key: this.key(id),
-            UploadId: session.uploadId,
-            PartNumber: session.partNumber,
-            Body: remaining,
+            Body: this.takeFromBuffer(session, session.bufferSize),
           }),
           { abortSignal: session.abort.signal },
         );
-
-        session.parts.push({
-          PartNumber: session.partNumber,
-          ETag: result.ETag!,
-        });
+        this.multipartSessions.delete(id);
+        return;
       }
+
+      // The last part (can be < 5MB) need not wait for the parts before it.
+      if (session.bufferSize > 0) {
+        const data = this.takeFromBuffer(session, session.bufferSize);
+        this.startPart(id, session, data, session.partNumber++);
+      }
+      await Promise.all(session.activeUploads);
+      if (session.uploadError) throw session.uploadError;
 
       // S3 refuses a list that is not in ascending order (InvalidPartOrder), and parallel
       // parts finish in any order: one that is retried or simply slower finishes after the
@@ -333,7 +353,7 @@ export class S3Storage implements StorageBackend {
         new CompleteMultipartUploadCommand({
           Bucket: this.bucket,
           Key: this.key(id),
-          UploadId: session.uploadId,
+          UploadId: await session.uploadId,
           MultipartUpload: { Parts: parts },
         }),
       );
@@ -522,12 +542,15 @@ export class S3Storage implements StorageBackend {
     this.multipartSessions.delete(id);
     session.abort.abort();
     await Promise.allSettled(session.activeUploads);
+    // An upload that was stored with one PutObject, or whose creation failed, has nothing to abort.
+    const uploadId = await session.uploadId?.catch(() => null);
+    if (!uploadId) return;
     try {
       await this.client.send(
         new AbortMultipartUploadCommand({
           Bucket: this.bucket,
           Key: this.key(id),
-          UploadId: session.uploadId,
+          UploadId: uploadId,
         }),
       );
     } catch (err) {

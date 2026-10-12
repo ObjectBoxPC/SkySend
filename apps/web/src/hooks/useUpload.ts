@@ -241,8 +241,10 @@ export function useUpload() {
         salt.buffer as ArrayBuffer,
       ];
 
-      // Speed calculation state
-      let lastLoaded = 0;
+      // Speed calculation state. The speed is the average over the last SPEED_WINDOW_MS,
+      // shown anew every 500 ms, so a short stall or burst does not throw the number around.
+      const SPEED_WINDOW_MS = 3000;
+      let speedSamples: Array<{ time: number; loaded: number }> = [];
       let lastTime = performance.now();
       let uploadStartTime = 0;
       let uploadTotalBytes = 0;
@@ -260,7 +262,7 @@ export function useUpload() {
           switch (msg.type) {
             case "phase":
               // Reset speed tracking on phase change
-              lastLoaded = 0;
+              speedSamples = [];
               lastTime = performance.now();
               if (msg.phase === "uploading") {
                 uploadStartTime = performance.now();
@@ -283,13 +285,17 @@ export function useUpload() {
               break;
             case "progress": {
               const now = performance.now();
-              const elapsed = (now - lastTime) / 1000;
+              if (speedSamples.length === 0) speedSamples.push({ time: lastTime, loaded: 0 });
+              speedSamples.push({ time: now, loaded: msg.loaded });
+              while (speedSamples.length > 2 && now - speedSamples[1]!.time >= SPEED_WINDOW_MS) {
+                speedSamples.shift();
+              }
               let speed: string | null = null;
               // Update speed every 500ms to avoid flickering
-              if (elapsed >= 0.5) {
-                const bytesPerSec = (msg.loaded - lastLoaded) / elapsed;
+              if (now - lastTime >= 500) {
+                const oldest = speedSamples[0]!;
+                const bytesPerSec = (msg.loaded - oldest.loaded) / ((now - oldest.time) / 1000);
                 speed = `${formatBytes(bytesPerSec)}/s`;
-                lastLoaded = msg.loaded;
                 lastTime = now;
               }
               setState((s) => ({

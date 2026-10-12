@@ -3,6 +3,7 @@ import {
   AbortMultipartUploadCommand,
   CompleteMultipartUploadCommand,
   CreateMultipartUploadCommand,
+  PutObjectCommand,
   S3Client,
   UploadPartCommand,
 } from "@aws-sdk/client-s3";
@@ -14,6 +15,7 @@ const ID = "0f8fad5b-d9cb-469f-a165-70867728950e";
 /** A stand-in for one part upload: the test decides when it finishes. */
 interface PendingPart {
   partNumber: number;
+  size: number;
   signal: AbortSignal | undefined;
   finish: () => void;
   fail: (err: Error) => void;
@@ -34,13 +36,21 @@ function fakeBucket() {
     command: unknown,
     options?: { abortSignal?: AbortSignal },
   ) => {
-    if (command instanceof CreateMultipartUploadCommand) return { UploadId: "upload-1" };
+    if (command instanceof CreateMultipartUploadCommand) {
+      events.push("create");
+      return { UploadId: "upload-1" };
+    }
+    if (command instanceof PutObjectCommand) {
+      events.push(`put ${(command.input.Body as Uint8Array).byteLength}`);
+      return {};
+    }
     if (command instanceof UploadPartCommand) {
       const partNumber = command.input.PartNumber!;
       return new Promise((resolve, reject) => {
         const settle = (outcome: string) => events.push(`part ${partNumber} ${outcome}`);
         const part: PendingPart = {
           partNumber,
+          size: (command.input.Body as Uint8Array).byteLength,
           signal: options?.abortSignal,
           finish: () => {
             settle("stored");
@@ -169,11 +179,59 @@ describe("S3Storage multipart uploads", () => {
     await s3.appendChunk(ID, streamOf(10 * MIB + 1024));
     (await bucket.part(1)).finish();
     (await bucket.part(2)).fail(new Error("socket hang up"));
-    await vi.waitFor(() => expect(bucket.events).toContain("part 2 failed"));
+    // Lets the failure reach the upload before finalize starts.
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     await expect(s3.finalizeChunkedUpload(ID)).rejects.toThrow("socket hang up");
     expect(bucket.events).toContain("abort upload-1");
     expect(bucket.completed).toHaveLength(0);
+  });
+
+  it("stores an upload that fits into one part with a single PutObject", async () => {
+    const s3 = storage();
+    await s3.createEmpty(ID, 3 * MIB);
+    await s3.appendChunk(ID, streamOf(MIB));
+    await s3.appendChunk(ID, streamOf(2 * MIB));
+    await s3.finalizeChunkedUpload(ID);
+    expect(bucket.events).toEqual([`put ${3 * MIB}`]);
+  });
+
+  it("leaves nothing to abort when an upload that fits into one part is abandoned", async () => {
+    const s3 = storage();
+    await s3.createEmpty(ID, 3 * MIB);
+    await s3.appendChunk(ID, streamOf(MIB));
+    await s3.abortChunkedUpload(ID);
+    expect(bucket.events).toEqual([]);
+  });
+
+  it("sends the last part beside the parts still in flight", async () => {
+    const s3 = storage();
+    await s3.createEmpty(ID);
+    await s3.appendChunk(ID, streamOf(10 * MIB + 1024));
+    const first = await bucket.part(1);
+    const second = await bucket.part(2);
+
+    const finalized = s3.finalizeChunkedUpload(ID);
+    // The last part goes out while the two before it are still uploading.
+    const last = await bucket.part(3);
+    expect(last.size).toBe(1024);
+    expect(bucket.events.filter((e) => e.startsWith("part"))).toEqual([]);
+    first.finish();
+    second.finish();
+    last.finish();
+    await finalized;
+    expect(bucket.completed[0]!.map((p) => p.PartNumber)).toEqual([1, 2, 3]);
+  });
+
+  it("picks parts large enough to keep a large upload within 10000 parts", async () => {
+    const s3 = storage();
+    // 100 GiB in 10000 parts takes 10.24 MiB each, which rounds up to 11 MiB.
+    await s3.createEmpty(ID, 100 * 1024 * MIB);
+    await s3.appendChunk(ID, streamOf(11 * MIB - 1));
+    expect(bucket.parts.size).toBe(0);
+    await s3.appendChunk(ID, streamOf(2));
+    expect((await bucket.part(1)).size).toBe(11 * MIB);
+    await s3.abortChunkedUpload(ID);
   });
 
   it("cancels the parts in flight and aborts only once none is left", async () => {
@@ -188,6 +246,6 @@ describe("S3Storage multipart uploads", () => {
     expect(first.signal?.aborted).toBe(true);
     expect(second.signal?.aborted).toBe(true);
     // A part still uploading while the abort runs can be stored after it and stay billed.
-    expect(bucket.events).toEqual(["part 1 failed", "part 2 failed", "abort upload-1"]);
+    expect(bucket.events).toEqual(["create", "part 1 failed", "part 2 failed", "abort upload-1"]);
   });
 });

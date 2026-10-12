@@ -106,8 +106,8 @@ A file request is a link you send to someone so they can upload files to you, en
 | `S3_SECRET_KEY` | ⚠️ | - | S3 secret access key. Required when `STORAGE_BACKEND=s3`. |
 | `S3_FORCE_PATH_STYLE` | ❌ | `false` | Use path-style URLs instead of virtual-hosted-style. Required for MinIO, Garage, and some self-hosted providers. |
 | `S3_PRESIGNED_EXPIRY` | ❌ | `300` | Presigned download URL expiry in seconds. |
-| `S3_PART_SIZE` | ❌ | `25MB` | Size of each S3 multipart upload part. Larger values reduce round-trips but use more memory. Minimum is `5MB` (S3 requirement). |
-| `S3_CONCURRENCY` | ❌ | `4` | Number of S3 parts uploaded in parallel. Higher values improve throughput but use more memory and bandwidth. Range: 1-16. |
+| `S3_PART_SIZE` | ❌ | `8MB` | Size of each S3 multipart upload part. Smaller parts keep uploads steadier and use less memory, larger ones take fewer requests. An upload that would need more than 10,000 parts uses larger ones on its own. Minimum is `5MB` (S3 requirement). |
+| `S3_CONCURRENCY` | ❌ | `8` | Number of S3 parts uploaded in parallel per upload. Higher values improve throughput but use more memory and bandwidth. Range: 1-16. |
 
 → See [S3 Storage](/user-guide/configuration/s3) for provider examples and CORS configuration.
 

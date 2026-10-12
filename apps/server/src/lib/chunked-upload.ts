@@ -154,7 +154,7 @@ export function createChunkedUploads<M>(
     /** Opens a session for an upload of `contentLength` bytes and returns its new ID. */
     async open(contentLength: number, meta: M): Promise<string> {
       const id = randomUUID();
-      await storage.createEmpty(id);
+      await storage.createEmpty(id, contentLength);
       sessions.set(id, {
         meta,
         contentLength,
