@@ -28,7 +28,9 @@ interface PendingPart {
  */
 function fakeBucket() {
   const events: string[] = [];
+  const settled = new Set<string>();
   const parts = new Map<number, PendingPart>();
+  const partsByKey = new Map<string, PendingPart>();
   const completed: Array<Array<{ PartNumber?: number }>> = [];
   let completeError: Error | null = null;
 
@@ -47,7 +49,10 @@ function fakeBucket() {
     if (command instanceof UploadPartCommand) {
       const partNumber = command.input.PartNumber!;
       return new Promise((resolve, reject) => {
-        const settle = (outcome: string) => events.push(`part ${partNumber} ${outcome}`);
+        const settle = (outcome: string) => {
+          events.push(`part ${partNumber} ${outcome}`);
+          settled.add(`${command.input.Key}:${partNumber}`);
+        };
         const part: PendingPart = {
           partNumber,
           size: (command.input.Body as Uint8Array).byteLength,
@@ -65,6 +70,7 @@ function fakeBucket() {
           part.fail(Object.assign(new Error("Request aborted"), { name: "AbortError" })),
         );
         parts.set(partNumber, part);
+        partsByKey.set(`${command.input.Key}:${partNumber}`, part);
       });
     }
     if (command instanceof CompleteMultipartUploadCommand) {
@@ -94,6 +100,11 @@ function fakeBucket() {
     failCompleteWith(err: Error) {
       completeError = err;
     },
+    partsByKey,
+    /** The parts sent so far that have not settled. */
+    open() {
+      return [...partsByKey.entries()].filter(([key]) => !settled.has(key)).map(([key]) => key);
+    },
     /** Waits until the part upload with this number has been sent. */
     async part(partNumber: number) {
       await vi.waitFor(() => expect(parts.has(partNumber)).toBe(true));
@@ -102,7 +113,7 @@ function fakeBucket() {
   };
 }
 
-function storage() {
+function storage(memoryLimit?: number) {
   return new S3Storage({
     bucket: "bucket",
     region: "us-east-1",
@@ -112,8 +123,11 @@ function storage() {
     presignedExpiry: 300,
     partSize: 5 * MIB,
     concurrency: 4,
+    memoryLimit,
   });
 }
+
+const ID_B = "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed";
 
 function streamOf(size: number) {
   return new ReadableStream<Uint8Array>({
@@ -231,6 +245,53 @@ describe("S3Storage multipart uploads", () => {
     expect(bucket.parts.size).toBe(0);
     await s3.appendChunk(ID, streamOf(2));
     expect((await bucket.part(1)).size).toBe(11 * MIB);
+    await s3.abortChunkedUpload(ID);
+  });
+
+  it("holds the parts of all uploads together to the memory limit, in the order they asked", async () => {
+    const s3 = storage(10 * MIB);
+    await s3.createEmpty(ID);
+    await s3.createEmpty(ID_B);
+    // Two parts of the first upload fill the limit, its third waits and so does its caller.
+    let firstDone = false;
+    const first = s3.appendChunk(ID, streamOf(15 * MIB)).then(() => (firstDone = true));
+    await vi.waitFor(() => expect(bucket.open()).toHaveLength(2));
+    let secondDone = false;
+    const second = s3.appendChunk(ID_B, streamOf(5 * MIB)).then(() => (secondDone = true));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(bucket.open()).toHaveLength(2);
+    expect(firstDone).toBe(false);
+    expect(secondDone).toBe(false);
+
+    // Room for one part: the third part of the first upload asked first and goes first.
+    bucket.partsByKey.get(`${ID}.bin:1`)!.finish();
+    await vi.waitFor(() => expect(bucket.open()).toContain(`${ID}.bin:3`));
+    await first;
+    expect(bucket.open()).not.toContain(`${ID_B}.bin:1`);
+    bucket.partsByKey.get(`${ID}.bin:2`)!.finish();
+    await second;
+    expect(bucket.open()).toEqual([`${ID}.bin:3`, `${ID_B}.bin:1`]);
+    await s3.abortChunkedUpload(ID);
+    await s3.abortChunkedUpload(ID_B);
+  });
+
+  it("gives the memory of a part back when it fails or is aborted", async () => {
+    const s3 = storage(5 * MIB);
+    await s3.createEmpty(ID);
+    await s3.appendChunk(ID, streamOf(5 * MIB));
+    await s3.abortChunkedUpload(ID);
+
+    await s3.createEmpty(ID_B);
+    await s3.appendChunk(ID_B, streamOf(5 * MIB));
+    expect(bucket.open()).toEqual([`${ID_B}.bin:1`]);
+    await s3.abortChunkedUpload(ID_B);
+  });
+
+  it("lets a part larger than the whole limit go once nothing else is on its way", async () => {
+    const s3 = storage(MIB);
+    await s3.createEmpty(ID);
+    await s3.appendChunk(ID, streamOf(5 * MIB));
+    expect(bucket.open()).toEqual([`${ID}.bin:1`]);
     await s3.abortChunkedUpload(ID);
   });
 

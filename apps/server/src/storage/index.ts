@@ -23,6 +23,7 @@ export async function createStorage(config: Config): Promise<StorageBackend> {
       presignedExpiry: config.S3_PRESIGNED_EXPIRY,
       partSize: config.S3_PART_SIZE,
       concurrency: config.S3_CONCURRENCY,
+      memoryLimit: config.S3_MEMORY_LIMIT,
     });
   }
 

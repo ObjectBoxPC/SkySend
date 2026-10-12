@@ -427,6 +427,18 @@ describe("config", () => {
       // S3_BUCKET, S3_REGION, S3_ACCESS_KEY, S3_SECRET_KEY intentionally absent
       await expect(loadFreshConfig()).rejects.toThrow("STORAGE_BACKEND=s3 requires");
     });
+
+    it("should hold S3 parts in flight to 256MB unless S3_MEMORY_LIMIT says otherwise", async () => {
+      expect((await loadFreshConfig()).S3_MEMORY_LIMIT).toBe(256 * 1024 * 1024);
+      vi.resetModules();
+      process.env.S3_MEMORY_LIMIT = "1GB";
+      expect((await loadFreshConfig()).S3_MEMORY_LIMIT).toBe(1024 ** 3);
+    });
+
+    it("should refuse an S3_MEMORY_LIMIT below 5MB", async () => {
+      process.env.S3_MEMORY_LIMIT = "4MB";
+      await expect(loadFreshConfig()).rejects.toThrow();
+    });
   });
 
   describe("OIDC cross-field validation", () => {

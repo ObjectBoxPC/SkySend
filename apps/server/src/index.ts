@@ -9,6 +9,7 @@ import { readFile } from "node:fs/promises";
 
 import { loadConfig } from "./lib/config.js";
 import { renderIndexHtml } from "./lib/index-html.js";
+import { createAssetHandler } from "./lib/static-assets.js";
 import { initDatabase, closeDatabase } from "./db/index.js";
 import { createStorage } from "./storage/index.js";
 import { startCleanupJob, runCleanup } from "./lib/cleanup.js";
@@ -375,10 +376,8 @@ app.use("/assets/*", async (c, next) => {
     c.res.headers.set("Cache-Control", "no-store");
   }
 });
-app.use(
-  "/assets/*",
-  serveStatic({ root: webDistPath, rewriteRequestPath: (path) => path }),
-);
+// From memory, one buffer per response, see createAssetHandler for the stall a stream caused.
+app.use("/assets/*", await createAssetHandler(join(webDistPath, "assets")));
 
 // SPA fallback with runtime-injected config values.
 // Must come BEFORE the catch-all serveStatic because serveStatic serves

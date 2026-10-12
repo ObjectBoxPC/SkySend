@@ -1,3 +1,7 @@
+### ✨ Features
+
+- **server**: `S3_MEMORY_LIMIT` caps the memory that all uploads to S3 hold together, 256MB by default, so many uploads at once slow down instead of running the server out of memory.
+
 ### 🐛 Bug Fixes
 
 - **server**: Uploads to S3 storage no longer fail at the very end when their parts finished uploading out of order, which happened most often with several uploads at once.
@@ -13,6 +17,7 @@
 - **server**: An upload to S3 storage smaller than one part is stored with a single request, and the last part of a larger one goes out beside the parts still uploading.
 - **server**: An upload over WebSocket stops as soon as writing to the storage fails, instead of after the browser sent the whole file.
 - **web**: The download service worker only handles downloads and no longer sees every other request of the app, which also makes uploads in chunks faster.
+- **server**: The files of the app are served from memory in one piece, so a page behind a reverse proxy on the same host no longer waits 200 to 400 ms for each of them.
 
 ### 🔄 Changed
 
@@ -28,3 +33,4 @@
 - **crypto**: Tests check the record layout of encrypted files against the format itself for every way the input can be cut into chunks.
 - **infra**: A benchmark sends large files up and down through the app in Chromium, Chrome, Firefox and WebKit and records the speed of every hop, for one transfer or several side by side, optionally over a slower network or behind Nginx.
 - **infra**: End-to-end tests check that the download service worker controls no page and replaces the registration of an older release.
+- **server**: Unit tests cover the memory limit of S3 uploads and the serving of the files of the app.

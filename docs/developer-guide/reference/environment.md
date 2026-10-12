@@ -598,6 +598,16 @@ All file-related variables have been renamed with a `FILE_` prefix (e.g. `MAX_FI
 | Range | 1-16 |
 | Description | Number of S3 multipart upload parts uploaded in parallel per upload. Higher values improve throughput by overlapping network transfers, which matters most on a connection with a long round trip to the bucket, but increase memory and bandwidth usage. |
 
+### S3_MEMORY_LIMIT
+
+| Property | Value |
+| --- | --- |
+| Required | No |
+| Type | Byte size (e.g. `256MB`, `1GB`) |
+| Default | `256MB` |
+| Minimum | `5MB` |
+| Description | Most bytes all uploads to S3 together hold in parts that are on their way to the bucket. A part is held in memory until the bucket has stored it, so without a limit every upload that is faster than the link to the bucket adds up to `S3_CONCURRENCY` parts, and enough of them at once run a small server out of memory. When the limit is reached, the next part of any upload waits until another one is stored, in the order they asked, and the senders slow down through the usual backpressure. A larger limit does not make uploads faster once the link to the bucket is busy: the default lets four uploads send all their parts at once. Each upload also holds up to `FILE_UPLOAD_WS_MAX_BUFFER` plus one part outside this limit. A part larger than the limit still goes out when no other part is on its way. |
+
 ### PUID
 
 | Property | Value |

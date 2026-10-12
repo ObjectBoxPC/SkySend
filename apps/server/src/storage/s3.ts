@@ -37,6 +37,42 @@ export interface S3StorageConfig {
   presignedExpiry: number;
   partSize: number;
   concurrency: number;
+  /** Most bytes all uploads together hold in parts on their way to the bucket. */
+  memoryLimit?: number;
+}
+
+/**
+ * The bytes of all parts on their way to the bucket, over every upload, held to a limit.
+ * A part waits for room in the order it asked, so every upload gets its turn. A part larger
+ * than the whole limit still goes when nothing else is on its way, so a small limit slows
+ * uploads down but never stops them.
+ */
+class PartMemory {
+  private used = 0;
+  private readonly waiting: Array<{ bytes: number; go: () => void }> = [];
+
+  constructor(private readonly limit: number) {}
+
+  private fits(bytes: number): boolean {
+    return this.used === 0 || this.used + bytes <= this.limit;
+  }
+
+  take(bytes: number): Promise<void> {
+    if (this.waiting.length === 0 && this.fits(bytes)) {
+      this.used += bytes;
+      return Promise.resolve();
+    }
+    return new Promise((go) => this.waiting.push({ bytes, go }));
+  }
+
+  give(bytes: number): void {
+    this.used -= bytes;
+    while (this.waiting.length > 0 && this.fits(this.waiting[0]!.bytes)) {
+      const next = this.waiting.shift()!;
+      this.used += next.bytes;
+      next.go();
+    }
+  }
 }
 
 interface MultipartSession {
@@ -76,6 +112,7 @@ export class S3Storage implements StorageBackend {
   private readonly presignedExpiry: number;
   private readonly partSize: number;
   private readonly concurrency: number;
+  private readonly partMemory: PartMemory;
   private readonly multipartSessions = new Map<string, MultipartSession>();
 
   constructor(config: S3StorageConfig) {
@@ -83,6 +120,7 @@ export class S3Storage implements StorageBackend {
     this.presignedExpiry = config.presignedExpiry;
     this.partSize = Math.max(config.partSize, MIN_PART_SIZE);
     this.concurrency = config.concurrency;
+    this.partMemory = new PartMemory(config.memoryLimit ?? Infinity);
 
     this.client = new S3Client({
       region: config.region,
@@ -211,7 +249,16 @@ export class S3Storage implements StorageBackend {
     return session.uploadId;
   }
 
-  /** Uploads one part in the background, tracked in activeUploads. */
+  /**
+   * Uploads one part in the background, tracked in activeUploads. Waits for room in the memory
+   * limit first, which holds back the caller and with it the sender, and gives it back once the
+   * part settled, stored or not.
+   */
+  private async sendPart(id: string, session: MultipartSession, data: Uint8Array, partNumber: number) {
+    await this.partMemory.take(data.byteLength);
+    this.startPart(id, session, data, partNumber);
+  }
+
   private startPart(id: string, session: MultipartSession, data: Uint8Array, partNumber: number) {
     const key = this.key(id);
     const p = this.createMultipartUpload(key, session)
@@ -237,6 +284,7 @@ export class S3Storage implements StorageBackend {
       })
       .finally(() => {
         session.activeUploads.delete(p);
+        this.partMemory.give(data.byteLength);
       });
     session.activeUploads.add(p);
   }
@@ -296,7 +344,7 @@ export class S3Storage implements StorageBackend {
         if (session.uploadError) throw session.uploadError;
       }
       const data = this.takeFromBuffer(session, session.partSize);
-      this.startPart(id, session, data, session.partNumber++);
+      await this.sendPart(id, session, data, session.partNumber++);
     }
 
     // If all slots are full, wait for ONE to finish. This delays the caller, which throttles
@@ -340,7 +388,7 @@ export class S3Storage implements StorageBackend {
       // The last part (can be < 5MB) need not wait for the parts before it.
       if (session.bufferSize > 0) {
         const data = this.takeFromBuffer(session, session.bufferSize);
-        this.startPart(id, session, data, session.partNumber++);
+        await this.sendPart(id, session, data, session.partNumber++);
       }
       await Promise.all(session.activeUploads);
       if (session.uploadError) throw session.uploadError;

@@ -409,6 +409,13 @@ const configSchema = z.object({
     .transform((v) => parseInt(v, 10))
     .pipe(z.number().int().min(1).max(16, "S3_CONCURRENCY must be between 1 and 16")),
 
+  /** Most bytes all uploads to S3 together hold in parts on their way to the bucket. */
+  S3_MEMORY_LIMIT: z
+    .string()
+    .default("256MB")
+    .transform((v) => parseByteSize(v))
+    .pipe(z.number().int().min(5 * 1024 * 1024, "S3_MEMORY_LIMIT must be at least 5MB")),
+
   // --- OIDC authentication (optional) ---
 
   /** Which provider preset to use. Defaults to "generic" when OIDC is active. */
@@ -573,6 +580,11 @@ export function loadConfig(): Config {
     if (missing.length > 0) {
       throw new Error(
         `STORAGE_BACKEND=s3 requires: ${missing.join(", ")}`,
+      );
+    }
+    if (_config.S3_MEMORY_LIMIT < _config.S3_PART_SIZE) {
+      console.warn(
+        "[config] S3_MEMORY_LIMIT is below S3_PART_SIZE, so uploads to S3 send one part at a time",
       );
     }
   }

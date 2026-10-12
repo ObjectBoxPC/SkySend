@@ -122,7 +122,8 @@ Use the Drizzle query builder. Raw SQL needs a comment explaining why.
 Rules:
 
 - IDs come from `randomUUID()`. Never build a storage path from user input - path traversal is the obvious attack here.
-- S3 uploads are multipart. A failed or abandoned upload must call `abortChunkedUpload` so parts are not billed forever.
+- S3 uploads are multipart. A failed or abandoned upload must call `abortChunkedUpload` so parts are not billed forever. `createEmpty(id, size)` gets the declared size: an upload that fits into one part is stored with one PutObject, and the part size grows so no upload needs more than 10,000 parts.
+- All S3 uploads together hold at most `S3_MEMORY_LIMIT` bytes in parts on their way to the bucket (`PartMemory` in `s3.ts`). A part waits for room in `appendChunk`, which is what slows the sender down. Only parts on their way count, never the start of a part still filling up: counting those could leave every upload waiting for room that only more data would free.
 - S3 downloads prefer a presigned URL, which means the browser talks to the bucket directly. The bucket's CORS policy has to allow the instance origin, and `src/index.ts` widens the CSP `connect-src` accordingly.
 - A new backend implements the full interface. Returning `false` from `supportsPresignedUrls()` is a valid answer, silently no-op'ing a method is not.
 
@@ -158,9 +159,9 @@ Order matters and is easy to break:
 2. `app.onError` - returns a generic message with `Cache-Control: no-store`
 3. `/api` group: `no-store` on every response, then the rate limiter with its chunk and WS exemptions
 4. Service guards, then the routes
-5. `/branding/*`, `/assets/*` (immutable caching), the SPA fallback, then the catch-all static handler
+5. `/branding/*`, `/assets/*` (immutable caching, served from memory by `createAssetHandler`), the SPA fallback, then the catch-all static handler
 
-The SPA fallback must stay ahead of the catch-all `serveStatic`, otherwise `GET /` bypasses the `__CUSTOM_TITLE__` injection. Error responses and `index.html` are `no-store` on purpose - the comments explain the caching-proxy failure they prevent.
+The SPA fallback must stay ahead of the catch-all `serveStatic`, otherwise `GET /` bypasses the `__CUSTOM_TITLE__` injection. `/assets/*` goes out as one buffer per response on purpose: streamed, the headers left on their own and TCP held the body back about 200 ms per file on a fresh loopback connection, which is how a reverse proxy on the same host connects. Do not put it back on `serveStatic`. Error responses and `index.html` are `no-store` on purpose - the comments explain the caching-proxy failure they prevent.
 
 Node timeouts at the bottom of the file (`headersTimeout` 60 s, `requestTimeout` 0, `keepAliveTimeout` 120 s) are tuned for slow multi-hour uploads behind a proxy. Each one has a comment. Do not "clean them up".
 
