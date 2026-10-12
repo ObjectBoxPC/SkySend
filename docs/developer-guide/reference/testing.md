@@ -153,6 +153,7 @@ Three checks run wherever a test shares, uploads or downloads:
 | `cli.spec.ts` | The CLI and the browser open each other's shares, with a password both ways, and a note made in the CLI |
 | `guard.spec.ts` | The recording of the proxy sees headers, bodies and WebSocket frames |
 | `transport.spec.ts` | The page arrives over HTTP/1.1 or HTTP/2 as its setup promises, and an upload takes its transport |
+| `service-worker.spec.ts` | The download Service Worker controls no page, a registration of an older release for the whole origin is replaced, and downloads still take tier 1 |
 | `compat.spec.ts` | Every link of an older release still opens after an update, see below |
 
 The **E2E Tests** jobs in `.github/workflows/validate.yml` run them on pull requests, one job per browser. A pull request into `dev` that changes nothing they build, run or read skips them, like one that only touches the website, the Workers or other docs. The **Changes** job decides that from the changed files in a few seconds. Pull requests into `main`, the release and a run started by hand always run them. `E2E_BROWSER` picks the engine, and a run then starts only the servers, proxies and containers that engine's projects need, so the Firefox job never pulls the S3 store. The same works locally, like `E2E_BROWSER=webkit pnpm test:e2e`, or with a list like `chromium,webkit`. When a job fails, its report with screenshots, videos and traces is attached to the run as the `e2e-report-<browser>` artifact. A trace opens with `pnpm --filter @skysend/e2e exec playwright show-trace <trace.zip>`.
@@ -188,6 +189,8 @@ node e2e/bench/timeline.mjs
 sudo e2e/bench/shape.sh apply 1gbit 5ms 400mbit 15ms
 sudo e2e/bench/shape.sh clear
 ```
+
+With `--uploads N --downloads M` it runs that many transfers at the same time, each in a context of its own, or with `--separate` in a browser of its own like people on other machines, and reports each one's speed while all ran and how evenly they shared (Jain's index, 1 is perfectly even), plus what the disk read and wrote.
 
 `pipeline.mjs` measures the stages of the browser alone, in a Web Worker like the app's: reading the file, `createEncryptStream`, raw AES-GCM and sending over a WebSocket to a sink that throws the bytes away. The stage that is slowest alone is the one that caps an upload. `e2e/bench/README.md` lists every option.
 

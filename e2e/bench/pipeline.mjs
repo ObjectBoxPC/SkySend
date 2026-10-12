@@ -32,6 +32,8 @@ const { values: opts } = parseArgs({
     // Gives that Service Worker static routes that send everything else to the network.
     routes: { type: "boolean", default: false },
     persistent: { type: "boolean", default: false },
+    // "chrome" drives an installed Google Chrome instead of Playwright's Chromium.
+    channel: { type: "string" },
   },
 });
 const PORT = Number(opts.port);
@@ -342,7 +344,7 @@ await new Promise((resolve) => server.listen(PORT, "127.0.0.1", resolve));
 const engine = { chromium, firefox, webkit }[opts.browser];
 // A persistent context is a normal profile with a disk, like a person's browser. The default
 // context of launch() is an incognito one, which keeps blobs in memory only.
-const launchOptions = opts.browser === "chromium" ? { channel: "chromium" } : {};
+const launchOptions = opts.browser === "chromium" ? { channel: opts.channel ?? "chromium" } : {};
 let browser;
 let page;
 if (opts.persistent) {

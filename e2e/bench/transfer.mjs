@@ -60,6 +60,18 @@ const { values: opts } = parseArgs({
     // Closes the sender this many seconds into the upload, the way a person closes the tab.
     // What it leaves behind shows whether an abandoned upload is cleaned up.
     "cancel-after": { type: "string" },
+    // Uploads and downloads that run at the same time, each in a browser context of its own,
+    // like people on different machines. The downloads are of files uploaded beforehand.
+    uploads: { type: "string" },
+    downloads: { type: "string" },
+    // Empties the page cache before the transfers of a mixed run start (sudo).
+    "drop-caches": { type: "boolean", default: false },
+    // Every transfer of a mixed run in a browser of its own instead of a context of one
+    // browser, so they share no network stack and no process, like people on other machines.
+    separate: { type: "boolean", default: false },
+    // The browser talks to the server directly, without proxy A, which runs in this process
+    // and could be the limit itself. Upload speeds then come from the worker alone.
+    direct: { type: "boolean", default: false },
   },
 });
 
@@ -74,7 +86,9 @@ const BASE = Number(opts.port);
 const PORTS = { proxyA: BASE, server: BASE + 1, proxyB: BASE + 2, s3: BASE + 3 };
 if (opts.proxy && opts.proxy !== "nginx") throw new Error("--proxy must be nginx");
 const TLS_PORT = BASE + 6;
-const ORIGIN = opts.proxy ? `https://localhost:${TLS_PORT}` : `http://127.0.0.1:${PORTS.proxyA}`;
+const ORIGIN = opts.proxy
+  ? `https://localhost:${TLS_PORT}`
+  : `http://127.0.0.1:${opts.direct ? PORTS.server : PORTS.proxyA}`;
 const BUCKET = "skysend-bench";
 const label =
   opts.label ??
@@ -118,8 +132,23 @@ async function hashFile(path) {
 }
 
 /** A TCP relay that counts the bytes in each direction. */
+/**
+ * Which transfer a request belongs to, from its request line: a download by the ID in its path,
+ * a WebSocket upload by the order its socket opened in, a chunk by the ID of its upload.
+ */
+const REQUEST_LINE = /^(GET|POST|PUT|HEAD|DELETE|OPTIONS) (\S+) HTTP\/1\.1/;
+function labelOf(path, counter) {
+  const id = /([0-9a-f]{8})-[0-9a-f-]{27}/.exec(path)?.[1];
+  if (/^\/api\/upload\/ws/.test(path)) return `up:ws${++counter.sockets}`;
+  if (/^\/api\/download\//.test(path) || /\.bin\?/.test(path)) return id ? `down:${id}` : null;
+  if (/\/chunk\?/.test(path) || /[?&]partNumber=/.test(path)) return id ? `up:${id}` : null;
+  return null;
+}
+
 function countingProxy(listenPort, host, port) {
-  const counter = { up: 0, down: 0, connections: 0 };
+  // labels: bytes per transfer, see labelOf. Only request lines at the start of a read are
+  // looked at, which is where a new request on a connection starts.
+  const counter = { up: 0, down: 0, connections: 0, sockets: 0, labels: new Map() };
   const sockets = new Set();
   const server = net.createServer((client) => {
     counter.connections++;
@@ -127,8 +156,29 @@ function countingProxy(listenPort, host, port) {
     client.setNoDelay(true);
     upstream.setNoDelay(true);
     sockets.add(client).add(upstream);
-    client.on("data", (data) => (counter.up += data.length));
-    upstream.on("data", (data) => (counter.down += data.length));
+    let label = null;
+    let upgraded = false;
+    const count = (direction, bytes) => {
+      if (!label) return;
+      const entry = counter.labels.get(label) ?? { up: 0, down: 0 };
+      entry[direction] += bytes;
+      counter.labels.set(label, entry);
+    };
+    client.on("data", (data) => {
+      counter.up += data.length;
+      if (!upgraded && data.length > 16) {
+        const line = REQUEST_LINE.exec(data.toString("latin1", 0, Math.min(data.length, 8192)));
+        if (line) {
+          label = labelOf(line[2], counter);
+          upgraded = /^\/api\/upload\/ws/.test(line[2]);
+        }
+      }
+      count("up", data.length);
+    });
+    upstream.on("data", (data) => {
+      counter.down += data.length;
+      count("down", data.length);
+    });
     client.pipe(upstream);
     upstream.pipe(client);
     const end = () => {
@@ -301,6 +351,29 @@ function browserTree(serverPid) {
   return processTree(process.pid).filter((pid) => pid !== process.pid && !server.has(pid));
 }
 
+/** The block device the bench writes to, as /proc/diskstats names it, like "sdb2". */
+function benchDevice() {
+  try {
+    const source = execFileSync("findmnt", ["-n", "-o", "SOURCE", "--target", WORK])
+      .toString()
+      .trim();
+    return source.replace(/^\/dev\//, "");
+  } catch {
+    return null;
+  }
+}
+const DEVICE = benchDevice();
+/** Bytes read and written on that device so far. */
+function diskBytes() {
+  if (!DEVICE) return { read: 0, written: 0 };
+  const line = readFileSync("/proc/diskstats", "utf8")
+    .split("\n")
+    .find((row) => row.trim().split(/\s+/)[2] === DEVICE);
+  if (!line) return { read: 0, written: 0 };
+  const fields = line.trim().split(/\s+/);
+  return { read: Number(fields[5]) * 512, written: Number(fields[9]) * 512 };
+}
+
 /** Samples every counter and both processes until stopped. */
 function startSampler(counters, serverPid) {
   const samples = [];
@@ -311,13 +384,23 @@ function startSampler(counters, serverPid) {
       tree = browserTree(serverPid);
       treeAge = 0;
     }
+    const disk = diskBytes();
+    const labels = {};
+    for (const counter of [counters.a, counters.b]) {
+      for (const [key, value] of counter?.labels ?? []) labels[key] = { ...value };
+    }
     samples.push({
       t: Date.now(),
+      diskRead: disk.read,
+      diskWritten: disk.written,
+      labels,
       aUp: counters.a.up,
       aDown: counters.a.down,
       bUp: counters.b?.up ?? 0,
       bDown: counters.b?.down ?? 0,
       serverCpu: cpuSeconds(serverPid),
+      // The main thread alone, where all JavaScript of the server runs.
+      serverMainCpu: cpuSeconds(`${serverPid}/task/${serverPid}`),
       serverRss: rssBytes(serverPid),
       browserCpu: tree.reduce((sum, pid) => sum + cpuSeconds(pid), 0),
       browserRss: tree.reduce((sum, pid) => sum + rssBytes(pid), 0),
@@ -378,6 +461,9 @@ function cost(samples, from, to) {
   const seconds = (last.t - first.t) / 1000;
   return {
     serverCpuPercent: Math.round(((last.serverCpu - first.serverCpu) / seconds) * 100),
+    serverMainThreadPercent: Math.round(
+      ((last.serverMainCpu - first.serverMainCpu) / seconds) * 100,
+    ),
     browserCpuPercent: Math.round(((last.browserCpu - first.browserCpu) / seconds) * 100),
     serverPeakRssMiB: Math.round(Math.max(...inside.map((s) => s.serverRss)) / MIB),
     browserPeakRssMiB: Math.round(Math.max(...inside.map((s) => s.browserRss)) / MIB),
@@ -602,6 +688,184 @@ async function singleTransfer(browser, source, result, sampler, counters) {
   }
 }
 
+/** The channel a browser is launched with: the full Chromium unless --channel says otherwise. */
+function launchChannel() {
+  const channel = opts.channel ?? (opts.browser === "chromium" ? "chromium" : undefined);
+  return channel && channel !== "shell" ? channel : undefined;
+}
+
+/** Shares the file through the UI of a fresh context and returns the link. */
+async function shareOnce(browser, source) {
+  const context = await browser.newContext({ locale: "en-US", ignoreHTTPSErrors: true });
+  const page = await context.newPage();
+  await page.goto(`${ORIGIN}/`);
+  await page.locator('input[type="file"]:not([webkitdirectory])').setInputFiles(source.path);
+  await page.getByRole("button", { name: "Encrypt and upload" }).click();
+  const box = page.getByLabel("Share this link", { exact: true });
+  await box.waitFor({ timeout: 60 * 60_000 });
+  const link = (await box.textContent()) ?? "";
+  await context.close();
+  return link;
+}
+
+/** Jain's fairness index of rates: 1 when all are equal, 1/n when one gets everything. */
+function fairness(rates) {
+  if (rates.length < 2) return null;
+  const sum = rates.reduce((a, b) => a + b, 0);
+  const squares = rates.reduce((a, b) => a + b * b, 0);
+  return squares === 0 ? null : Math.round(((sum * sum) / (rates.length * squares)) * 100) / 100;
+}
+
+/**
+ * Runs `uploads` uploads and `downloads` downloads at the same time and records, per transfer,
+ * its time and its speed while all of them ran, and how evenly they shared.
+ */
+async function mixedTransfers(browser, source, uploads, downloads, result, sampler) {
+  // The files to download, shared one by one before anything is measured.
+  const links = [];
+  for (let i = 0; i < downloads; i++) links.push(await shareOnce(browser, source));
+  const idOf = (link) => /\/file\/([0-9a-f]{8})/.exec(link)?.[1];
+
+  // A context of the shared browser, or of a browser of its own with --separate.
+  const contextFor = async (options) => {
+    if (!opts.separate) return browser.newContext(options);
+    const own = await engine.launch({
+      downloadsPath: join(WORK, "downloads"),
+      ...(launchChannel() ? { channel: launchChannel() } : {}),
+      ...(opts.proxy && opts.browser === "chromium"
+        ? { args: ["--ignore-certificate-errors"] }
+        : {}),
+    });
+    cleanups.push(() => own.close());
+    return own.newContext(options);
+  };
+
+  // Every page is ready first, so all transfers start together instead of when their page loaded.
+  const prepared = await Promise.all([
+    ...Array.from({ length: uploads }, async (_, index) => {
+      const context = await contextFor({ locale: "en-US", ignoreHTTPSErrors: true });
+      await context.addInitScript(RECORDER);
+      const page = await context.newPage();
+      await page.goto(`${ORIGIN}/`);
+      await page.locator('input[type="file"]:not([webkitdirectory])').setInputFiles(source.path);
+      const button = page.getByRole("button", { name: "Encrypt and upload" });
+      await button.waitFor();
+      return { kind: "upload", name: `upload ${index + 1}`, context, page, button };
+    }),
+    ...links.map(async (link, index) => {
+      const context = await contextFor({
+        locale: "en-US",
+        acceptDownloads: true,
+        ignoreHTTPSErrors: true,
+      });
+      const page = await context.newPage();
+      await page.goto(link);
+      const button = page.getByRole("button", { name: "Download", exact: true });
+      await button.waitFor();
+      return {
+        kind: "download",
+        name: `download ${index + 1}`,
+        label: `down:${idOf(link)}`,
+        context,
+        page,
+        button,
+      };
+    }),
+  ]);
+  if (opts["drop-caches"]) {
+    // The files come from the disk then, not from memory.
+    execFileSync("sudo", ["sh", "-c", "sync; echo 3 > /proc/sys/vm/drop_caches"]);
+  }
+
+  const start = Date.now();
+  const runs = prepared.map(async ({ kind, name, label, context, page, button }) => {
+    const began = Date.now();
+    if (kind === "upload") {
+      await button.click();
+      const toast = page.locator('[data-sonner-toast][data-type="error"]').first();
+      const outcome = await Promise.race([
+        page
+          .getByLabel("Share this link", { exact: true })
+          .waitFor({ timeout: 60 * 60_000 })
+          .then(() => "link"),
+        toast.waitFor({ timeout: 60 * 60_000 }).then(() => "error"),
+      ]);
+      if (outcome === "error") throw new Error(`An upload failed: ${await toast.textContent()}`);
+      const ended = Date.now();
+      const events = await page.evaluate(() => window.__bench);
+      await context.close();
+      const progress = events.filter((e) => e.type === "progress").map((e) => [e.t, e.loaded]);
+      return { kind, name, began, ended, progress };
+    }
+    const started = page.waitForEvent("download", { timeout: 10 * 60_000 });
+    await button.click();
+    const anyway = page.getByRole("button", { name: "Download anyway" });
+    const warned = await Promise.race([
+      started.then(() => false),
+      anyway.waitFor({ timeout: 10 * 60_000 }).then(() => true),
+    ]);
+    if (warned) await anyway.click();
+    const download = await started;
+    const path = await download.path();
+    const ended = Date.now();
+    const intact = opts["no-verify"] ? undefined : (await hashFile(path)) === source.sha256;
+    await download.delete();
+    await context.close();
+    return { kind, name, label, began, ended, intact };
+  });
+  const transfers = await Promise.all(runs);
+  const end = Date.now();
+
+  // The window in which every transfer ran, which is where sharing shows.
+  const from = Math.max(...transfers.map((t) => t.began)) + 1000;
+  const to = Math.min(...transfers.map((t) => t.ended)) - 500;
+  const at = (time) =>
+    sampler.samples.reduce((best, s) => (s.t <= time ? s : best), sampler.samples[0]);
+  const bytesAt = (transfer, time) => {
+    if (transfer.kind === "upload") {
+      let bytes = 0;
+      for (const [t, loaded] of transfer.progress) if (t <= time) bytes = loaded;
+      return bytes;
+    }
+    return at(time).labels[transfer.label]?.down ?? 0;
+  };
+  const seconds = (to - from) / 1000;
+  for (const transfer of transfers) {
+    transfer.seconds = (transfer.ended - transfer.began) / 1000;
+    transfer.mibPerSecond = Math.round((SIZE / MIB / transfer.seconds) * 10) / 10;
+    transfer.whileAllRan =
+      seconds > 1
+        ? Math.round(((bytesAt(transfer, to) - bytesAt(transfer, from)) / MIB / seconds) * 10) / 10
+        : null;
+    delete transfer.progress;
+  }
+  const rates = (kind) =>
+    transfers.filter((t) => !kind || t.kind === kind).map((t) => t.whileAllRan ?? 0);
+  const first = at(start);
+  const last = at(end);
+  const span = (last.t - first.t) / 1000;
+  result.mixed = {
+    uploads,
+    downloads,
+    seconds: (end - start) / 1000,
+    overlapSeconds: Math.round(seconds * 10) / 10,
+    transfers,
+    fairness: {
+      uploads: fairness(rates("upload")),
+      downloads: fairness(rates("download")),
+      all: fairness(rates()),
+    },
+    totalWhileAllRan: Math.round(rates().reduce((a, b) => a + b, 0) * 10) / 10,
+    disk: {
+      device: DEVICE,
+      readMibPerSecond: Math.round(((last.diskRead - first.diskRead) / MIB / span) * 10) / 10,
+      writtenMibPerSecond:
+        Math.round(((last.diskWritten - first.diskWritten) / MIB / span) * 10) / 10,
+    },
+    cost: cost(sampler.samples, start, end),
+  };
+}
+
 /** Uploads the file from `count` senders at once and records time and cost of all of them. */
 async function parallelUploads(browser, source, count, result, sampler) {
   const start = Date.now();
@@ -664,7 +928,7 @@ async function main() {
   rmSync(downloads, { recursive: true, force: true });
   mkdirSync(downloads, { recursive: true });
   cleanups.push(() => rmSync(downloads, { recursive: true, force: true }));
-  const channel = opts.channel ?? (opts.browser === "chromium" ? "chromium" : undefined);
+  const channel = launchChannel();
   const browser = await engine.launch({
     downloadsPath: downloads,
     // Chromium refuses a Service Worker from an origin with a certificate error unless the
@@ -688,7 +952,10 @@ async function main() {
     startedAt: new Date().toISOString(),
   };
   try {
-    if (Number(opts.parallel) > 1)
+    if (opts.uploads || opts.downloads) {
+      const uploads = Number(opts.uploads ?? 0);
+      await mixedTransfers(browser, source, uploads, Number(opts.downloads ?? 0), result, sampler);
+    } else if (Number(opts.parallel) > 1)
       await parallelUploads(browser, source, Number(opts.parallel), result, sampler);
     else await singleTransfer(browser, source, result, sampler, counters);
   } finally {

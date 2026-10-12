@@ -190,41 +190,61 @@ export async function triggerBlobDownload(
 }
 
 /**
- * Waits for a Service Worker to be controlling this page.
- * Has a hard timeout - navigator.serviceWorker.ready never resolves
- * if no SW was registered (e.g. file not found at origin).
+ * Where the download Service Worker works: the URLs tier 1 navigates to, and nothing else.
+ * Registered for the whole origin, it saw every request of every page, uploads among them,
+ * and Chromium keeps the body of each such request alive in blob memory, which ran a chunked
+ * upload of 2 GiB out of it in an incognito window. A navigation to a URL in its scope still
+ * reaches it, so tier 1 needs no page it controls.
+ */
+export const DOWNLOAD_SW_SCOPE = "/__skysend_download__/";
+
+/**
+ * Registers the download Service Worker. Releases before 2026-10 registered it for the whole
+ * origin, so such a registration is removed. The page it controls right now stays controlled
+ * until it navigates.
+ */
+export function registerDownloadSw(): Promise<ServiceWorkerRegistration> {
+  navigator.serviceWorker
+    .getRegistrations()
+    .then((registrations) => {
+      for (const registration of registrations) {
+        const worker = registration.active ?? registration.waiting ?? registration.installing;
+        const script = worker ? new URL(worker.scriptURL).pathname : "";
+        if (script === "/download-sw.js" && new URL(registration.scope).pathname === "/") {
+          void registration.unregister();
+        }
+      }
+    })
+    .catch(() => {});
+  return navigator.serviceWorker.register("/download-sw.js", { scope: DOWNLOAD_SW_SCOPE });
+}
+
+/** The active worker of a registration, waiting for one that is still installing. */
+function activeWorker(registration: ServiceWorkerRegistration): Promise<ServiceWorker | null> {
+  if (registration.active) return Promise.resolve(registration.active);
+  const pending = registration.installing ?? registration.waiting;
+  if (!pending) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    pending.addEventListener("statechange", () => {
+      if (pending.state === "activated") resolve(pending);
+      if (pending.state === "redundant") resolve(null);
+    });
+  });
+}
+
+/**
+ * Waits until the download Service Worker is active. It controls no page, see
+ * DOWNLOAD_SW_SCOPE, so this waits for the worker itself, not for a controller.
+ * Has a hard timeout, since a registration that fails to install never activates.
  */
 export async function ensureSwController(): Promise<ServiceWorker | null> {
   if (!("serviceWorker" in navigator)) return null;
 
-  if (navigator.serviceWorker.controller) {
-    return navigator.serviceWorker.controller;
-  }
-
-  // Hard timeout: .ready never resolves if SW registration failed
   const result = await Promise.race([
     (async () => {
       try {
-        // Try to register (might already be registered from main.tsx)
-        await navigator.serviceWorker.register("/download-sw.js");
-        await navigator.serviceWorker.ready;
-
-        if (navigator.serviceWorker.controller) {
-          return navigator.serviceWorker.controller;
-        }
-
-        // Wait for clients.claim() from the SW
-        return new Promise<ServiceWorker | null>((resolve) => {
-          const t = setTimeout(() => resolve(null), 2000);
-          navigator.serviceWorker.addEventListener(
-            "controllerchange",
-            () => {
-              clearTimeout(t);
-              resolve(navigator.serviceWorker.controller);
-            },
-            { once: true },
-          );
-        });
+        // Registered from main.tsx already, which this finds again.
+        return await activeWorker(await registerDownloadSw());
       } catch (err) {
         console.warn("[SkySend] SW registration failed:", err);
         return null;

@@ -3,6 +3,7 @@
 - **server**: Uploads to S3 storage no longer fail at the very end when their parts finished uploading out of order, which happened most often with several uploads at once.
 - **server**: A failed or abandoned upload to S3 storage no longer leaves its uploaded parts in the bucket, where the provider kept billing them.
 - **server**: Uploads to S3 storage that need more than 10,000 parts no longer fail, since the part size grows with the size of the upload.
+- **web**: Uploads in chunks, the fallback when a WebSocket cannot connect, no longer fail in a Chrome incognito window once a file passes 1 to 2 GB.
 
 ### 🎨 Improvements
 
@@ -11,6 +12,7 @@
 - **web**: The progress bar and the speed of an upload follow what really left the browser and change smoothly, instead of lagging behind and jumping at the end.
 - **server**: An upload to S3 storage smaller than one part is stored with a single request, and the last part of a larger one goes out beside the parts still uploading.
 - **server**: An upload over WebSocket stops as soon as writing to the storage fails, instead of after the browser sent the whole file.
+- **web**: The download service worker only handles downloads and no longer sees every other request of the app, which also makes uploads in chunks faster.
 
 ### 🔄 Changed
 
@@ -24,4 +26,5 @@
 
 - **server**: Unit tests cover the order of the parts and the abort of S3 multipart uploads.
 - **crypto**: Tests check the record layout of encrypted files against the format itself for every way the input can be cut into chunks.
-- **infra**: A benchmark sends large files up and down through the app in Chromium, Firefox and WebKit and records the speed of every hop, optionally over a slower network.
+- **infra**: A benchmark sends large files up and down through the app in Chromium, Chrome, Firefox and WebKit and records the speed of every hop, for one transfer or several side by side, optionally over a slower network or behind Nginx.
+- **infra**: End-to-end tests check that the download service worker controls no page and replaces the registration of an older release.

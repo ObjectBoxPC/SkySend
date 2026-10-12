@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Shapes the loopback traffic of transfer.mjs, so a run on one machine meets a real network:
 # the hop from the browser to the server (proxy A, port BASE) and the hop from the server to the
-# bucket (proxy B, port BASE+2) each get their own rate and delay. Nothing else on the machine is
-# touched, other traffic keeps the bands of the default priomap. Needs root.
+# bucket (proxy B, port BASE+2) each get their own rate and delay. Each direction of a hop has a
+# queue of its own, like a full duplex line, so an upload does not eat the rate of a download.
+# Nothing else on the machine is touched, other traffic keeps the bands of the default priomap.
+# Needs root.
 #
 #   sudo e2e/bench/shape.sh apply <client rate> <client delay> <s3 rate> <s3 delay> [base port]
 #   sudo e2e/bench/shape.sh apply 1gbit 5ms 400mbit 15ms
@@ -21,18 +23,23 @@ case "$action" in
     client_rate=$2 client_delay=$3 s3_rate=$4 s3_delay=$5 base=${6:-3900}
     tc qdisc del dev "$DEV" root 2>/dev/null || true
     # Bands 1:1 to 1:3 carry everything else exactly as the default priomap would.
-    tc qdisc add dev "$DEV" root handle 1: prio bands 5 priomap 1 2 2 2 1 2 0 0 1 1 1 1 1 1 1 1
-    hop() {
-      local band=$1 port=$2 rate=$3 delay=$4
-      if [ "$rate" = "none" ]; then return; fi
+    tc qdisc add dev "$DEV" root handle 1: prio bands 7 priomap 1 2 2 2 1 2 0 0 1 1 1 1 1 1 1 1
+    # One band per direction: packets to the port go one way, packets from it the other.
+    direction() {
+      local band=$1 match=$2 port=$3 rate=$4 delay=$5
       # Unquoted on purpose: a delay like "15ms 10ms" adds jitter as a second word.
       # shellcheck disable=SC2086
       tc qdisc add dev "$DEV" parent "1:$band" handle "${band}0:" netem delay $delay rate "$rate" limit 100000
-      tc filter add dev "$DEV" parent 1: protocol ip prio 1 u32 match ip dport "$port" 0xffff flowid "1:$band"
-      tc filter add dev "$DEV" parent 1: protocol ip prio 1 u32 match ip sport "$port" 0xffff flowid "1:$band"
+      tc filter add dev "$DEV" parent 1: protocol ip prio 1 u32 match ip "$match" "$port" 0xffff flowid "1:$band"
+    }
+    hop() {
+      local first=$1 port=$2 rate=$3 delay=$4
+      if [ "$rate" = "none" ]; then return; fi
+      direction "$first" dport "$port" "$rate" "$delay"
+      direction "$((first + 1))" sport "$port" "$rate" "$delay"
     }
     hop 4 "$base" "$client_rate" "$client_delay"
-    hop 5 "$((base + 2))" "$s3_rate" "$s3_delay"
+    hop 6 "$((base + 2))" "$s3_rate" "$s3_delay"
     tc qdisc show dev "$DEV"
     ;;
   clear)

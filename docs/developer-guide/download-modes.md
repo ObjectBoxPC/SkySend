@@ -59,10 +59,10 @@ Service Worker (inside respondWith):
 
 ### How it works
 
-1. Main thread checks that a Service Worker is controlling the page (`ensureSwController()`)
+1. Main thread checks that the download Service Worker is active (`ensureSwController()`). It controls no page, only the URLs under `/__skysend_download__/`
 2. Main thread sends download config to SW via `postMessage`: URL, auth token, raw secret, salt, filename, MIME type, encrypted size
 3. Main thread navigates to `/__skysend_download__/{id}`
-4. SW intercepts the fetch event, calls `handleDownload()` inside `respondWith()`
+4. SW intercepts the navigation, which lies in its scope, and calls `handleDownload()` inside `respondWith()`
 5. SW derives the AES-256-GCM file key via HKDF (using `crypto.subtle`)
 6. SW fetches the encrypted file from the server
 7. SW creates a `ReadableStream` with a `pull()` function that:
@@ -172,15 +172,15 @@ if (!downloaded) {
 
 ## Service Worker Registration
 
-The Service Worker (`download-sw.js`) is registered in `main.tsx`:
+The Service Worker (`download-sw.js`) is registered in `main.tsx` through `registerDownloadSw()` in `opfs-download.ts`, with the scope `/__skysend_download__/`:
 
 ```typescript
-if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/download-sw.js").catch(() => {});
-}
+navigator.serviceWorker.register("/download-sw.js", { scope: DOWNLOAD_SW_SCOPE });
 ```
 
-The SW uses `skipWaiting()` and `clients.claim()` to activate immediately. The server must serve `/download-sw.js` with the correct MIME type (`application/javascript`) - a dedicated route exists in the Hono server to prevent the SPA catch-all from serving it as `index.html`.
+The scope is the URLs tier 1 navigates to and nothing else. A navigation reaches the worker of the scope it lies in even from a page no worker controls, so tier 1 works the same. Releases before 2026-10 registered it for the whole origin, which put every request of every page through its fetch handler, the requests of an upload among them. Chromium keeps the body of such a request alive in blob memory, and a chunked upload of 2 GiB in an incognito window failed with `ERR_BLOB_OUT_OF_MEMORY`. `registerDownloadSw()` removes such an old registration.
+
+The SW uses `skipWaiting()` to activate immediately, so `ensureSwController()` waits for the active worker of the registration, not for `navigator.serviceWorker.controller`, which stays empty. The server must serve `/download-sw.js` with the correct MIME type (`application/javascript`) - a dedicated route exists in the Hono server to prevent the SPA catch-all from serving it as `index.html`.
 
 ## Browser Compatibility Matrix
 

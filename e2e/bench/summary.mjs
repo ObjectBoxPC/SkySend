@@ -22,6 +22,21 @@ const files =
 
 for (const file of files) {
   const r = JSON.parse(readFileSync(file, "utf8"));
+  if (r.mixed) {
+    const m = r.mixed;
+    console.log(
+      `run=${r.label}  ${m.uploads} up + ${m.downloads} down  secs=${m.seconds}  overlap=${m.overlapSeconds}s  ` +
+        `total while all ran=${m.totalWhileAllRan}  fair up=${m.fairness.uploads} down=${m.fairness.downloads} all=${m.fairness.all}  ` +
+        `disk r=${m.disk.readMibPerSecond} w=${m.disk.writtenMibPerSecond}  srv MiB=${m.cost?.serverPeakRssMiB} cpu=${m.cost?.serverCpuPercent} main=${m.cost?.serverMainThreadPercent}`,
+    );
+    for (const t of m.transfers) {
+      const ok = t.intact === undefined ? "" : `  intact=${t.intact}`;
+      console.log(
+        `    ${t.name.padEnd(11)} ${t.mibPerSecond} MiB/s over ${t.seconds}s, ${t.whileAllRan} while all ran${ok}`,
+      );
+    }
+    continue;
+  }
   const u = r.upload ?? {};
   const d = r.download ?? {};
   const p = r.parallel;

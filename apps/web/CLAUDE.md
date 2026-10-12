@@ -71,6 +71,8 @@ All of it comes from `@skysend/crypto`. Do not reimplement key derivation or str
 
 Tier 1 is the only shape that gets real backpressure in Firefox, which is why `download-sw.js` reimplements the ECE constants instead of importing them. Those constants must stay in sync with `@skysend/crypto`.
 
+The Service Worker is registered for the scope `/__skysend_download__/` alone (`DOWNLOAD_SW_SCOPE` in `lib/opfs-download.ts`), so it controls no page and sees no upload, and `ensureSwController()` waits for its active worker, never for `navigator.serviceWorker.controller`. Do not widen the scope: registered for the whole origin, its fetch handler held the Blob bodies of chunked uploads until Chromium ran out of blob memory at 1 to 2 GiB in an incognito window.
+
 Safari is excluded from tier 1 deliberately - it terminates Service Workers early and buffers stream responses in RAM. A Safari download over `SAFARI_BIG_SIZE` shows a warning first. Firefox with DevTools open gets its own warning because the network panel buffers the response.
 
 `lib/download-tiers.ts` only imports `ensureSwController` and `streamDownloadViaSw` from `lib/opfs-download.ts`. The OPFS-worker pipeline in that file (`checkOpfsSupport`, `startOpfsDownload`, `triggerSwDownload`, `triggerBlobDownload`, and all of `lib/opfs-worker.ts`) is not reachable from the app today - read `lib/download-tiers.ts`, not those functions, when reasoning about what actually runs.
