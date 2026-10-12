@@ -1,7 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
-import { registerDownloadSw } from "./lib/opfs-download";
+import { registerDownloadSw } from "./lib/sw-download";
 import { applyRewrittenShareLinkFix } from "./lib/rewritten-link";
 import "./i18n";
 import "@fontsource-variable/geist";

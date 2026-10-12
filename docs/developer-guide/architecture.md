@@ -311,8 +311,10 @@ apps/web/src/
     api.ts              # API client
     note-editor.ts      # Draft blocks, empty blocks, blocks to send
     highlight.ts        # Code highlighting, sanitized with DOMPurify
-    opfs-download.ts    # OPFS probe, SW stream, download triggers
-    opfs-worker.ts      # Web Worker: fetch + decrypt + OPFS write
+    download-tiers.ts   # The four download tiers, tried in order
+    sw-download.ts      # Tier 1: registers the download Service Worker and drives it
+    opfs-file.ts        # Tier 3: decrypted file written to OPFS, then handed over
+    opfs-file-worker.ts # Web Worker: OPFS writes through a sync access handle
     upload-store.ts     # IndexedDB operations
     upload-worker.ts    # Web Worker: encrypt + upload (WS primary, HTTP fallback)
     zip.ts              # Client-side zip/unzip (fflate)

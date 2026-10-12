@@ -83,9 +83,10 @@ export default defineConfig(({ command }) => {
       // Hooks that render a provider are .tsx files, so both extensions count.
       include: ["src/lib/**/*.ts", "src/hooks/**/*.{ts,tsx}"],
       exclude: [
-        // Browser OPFS / Worker context - not unit-testable in Node
-        "src/lib/opfs-download.ts",
-        "src/lib/opfs-worker.ts",
+        // Browser OPFS / Service Worker / Worker context - not unit-testable in Node
+        "src/lib/sw-download.ts",
+        "src/lib/opfs-file.ts",
+        "src/lib/opfs-file-worker.ts",
         "src/lib/upload-worker.ts",
         // HTTP/Fetch client - integration-level, not unit-testable without a server
         "src/lib/api.ts",

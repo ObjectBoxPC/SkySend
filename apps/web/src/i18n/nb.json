@@ -294,6 +294,8 @@
     "tierSw": "SW-strøm",
     "tierFilePicker": "Lagre-dialog",
     "tierBlob": "Blob",
+    "tierOpfs": "Nettleserlagring (OPFS)",
+    "tierOpfsShort": "OPFS",
     "transportWs": "WebSocket",
     "transportHttp": "HTTP-biter",
     "swPathStream": "ReadableStream",

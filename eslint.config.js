@@ -17,6 +17,9 @@ export default tseslint.config(
       "website/",
       "e2e/playwright-report/",
       "e2e/test-results/",
+      // Files of the large-file test and the benchmark, never committed.
+      "e2e/.large-files/",
+      "e2e/.tools/",
     ],
   },
   js.configs.recommended,

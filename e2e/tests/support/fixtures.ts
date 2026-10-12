@@ -166,7 +166,9 @@ export const test = base.extend<Fixtures & TargetOptions>({
 
   // Safari is kept off the Service Worker on purpose, and WebKit is close enough to count.
   expectedTier: async ({ browserName }, use) => {
-    await use(browserName === "webkit" ? "3" : "1");
+    // WebKit on Linux has no working OPFS (tier 3), so it lands on the Blob (tier 4). Safari on
+    // a Mac takes tier 3.
+    await use(browserName === "webkit" ? "4" : "1");
   },
 });
 

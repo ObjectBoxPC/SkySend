@@ -389,7 +389,9 @@
       "debug.devtoolsWarningText",
       "debug.started",
       "debug.note",
-      "debug.failed"
+      "debug.failed",
+      "debug.tierOpfs",
+      "debug.tierOpfsShort"
     ],
     "_contributorNote": "Tradução para Português do Brasil (pt-BR) criada seguindo as convenções do projeto. Revisão por falante nativo recomendada."
   },
@@ -683,6 +685,8 @@
     "tierSw": "Stream SW",
     "tierFilePicker": "Salvar arquivo",
     "tierBlob": "Blob",
+    "tierOpfs": "Armazenamento do navegador (OPFS)",
+    "tierOpfsShort": "OPFS",
     "transportWs": "WebSocket",
     "transportHttp": "Blocos HTTP",
     "swPathStream": "ReadableStream",

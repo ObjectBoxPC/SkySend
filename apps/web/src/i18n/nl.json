@@ -294,6 +294,8 @@
     "tierSw": "SW-stream",
     "tierFilePicker": "Bestand opslaan",
     "tierBlob": "Blob",
+    "tierOpfs": "Browseropslag (OPFS)",
+    "tierOpfsShort": "OPFS",
     "transportWs": "WebSocket",
     "transportHttp": "HTTP-chunks",
     "swPathStream": "ReadableStream",

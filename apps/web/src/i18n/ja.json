@@ -538,7 +538,9 @@
       "debug.devtoolsWarningText",
       "debug.started",
       "debug.note",
-      "debug.failed"
+      "debug.failed",
+      "debug.tierOpfs",
+      "debug.tierOpfsShort"
     ],
     "_contributorNote": "このファイルはAIによる初期翻訳です。日本語として自然になるよう確認しています。修正は歓迎します。"
   },
@@ -832,6 +834,8 @@
     "tierSw": "SWストリーム",
     "tierFilePicker": "ファイル保存ダイアログ",
     "tierBlob": "Blob",
+    "tierOpfs": "ブラウザストレージ (OPFS)",
+    "tierOpfsShort": "OPFS",
     "transportWs": "WebSocket",
     "transportHttp": "HTTPチャンク",
     "swPathStream": "ReadableStream",

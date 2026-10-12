@@ -294,6 +294,8 @@
     "tierSw": "SW-virta",
     "tierFilePicker": "Tallenna tiedosto -valintaikkuna",
     "tierBlob": "Blob",
+    "tierOpfs": "Selaimen tallennustila (OPFS)",
+    "tierOpfsShort": "OPFS",
     "transportWs": "WebSocket",
     "transportHttp": "HTTP-lohkot",
     "swPathStream": "ReadableStream",

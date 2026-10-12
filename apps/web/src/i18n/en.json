@@ -289,6 +289,8 @@
     "tierSw": "SW Stream",
     "tierFilePicker": "Save File Picker",
     "tierBlob": "Blob",
+    "tierOpfs": "Browser storage (OPFS)",
+    "tierOpfsShort": "OPFS",
     "transportWs": "WebSocket",
     "transportHttp": "HTTP Chunks",
     "swPathStream": "ReadableStream",

@@ -38,7 +38,7 @@ vi.mock("../../src/lib/api.js", () => ({
   },
 }));
 
-vi.mock("../../src/lib/opfs-download.js", () => ({
+vi.mock("../../src/lib/sw-download.js", () => ({
   ensureSwController: vi.fn().mockResolvedValue(undefined),
   streamDownloadViaSw: vi.fn().mockResolvedValue(undefined),
 }));
@@ -686,7 +686,7 @@ describe("useDownload", () => {
 
   it("download() SW-Tier-1 (ensureSwController truthy) → phase='done'", async () => {
     const apiMod = await import("../../src/lib/api.js");
-    const opfs = await import("../../src/lib/opfs-download.js");
+    const opfs = await import("../../src/lib/sw-download.js");
     vi.mocked(opfs.ensureSwController).mockResolvedValueOnce(
       {} as unknown as Awaited<ReturnType<typeof opfs.ensureSwController>>,
     );
@@ -712,7 +712,7 @@ describe("useDownload", () => {
 
   it("download() SW-Tier-1 AbortError → phase='idle'", async () => {
     const apiMod = await import("../../src/lib/api.js");
-    const opfs = await import("../../src/lib/opfs-download.js");
+    const opfs = await import("../../src/lib/sw-download.js");
     vi.mocked(opfs.ensureSwController).mockResolvedValueOnce(
       {} as unknown as Awaited<ReturnType<typeof opfs.ensureSwController>>,
     );
@@ -733,7 +733,7 @@ describe("useDownload", () => {
 
   it("download() SW-Tier-1 Fehler → fällt auf Tier-3-Blob zurück", async () => {
     const apiMod = await import("../../src/lib/api.js");
-    const opfs = await import("../../src/lib/opfs-download.js");
+    const opfs = await import("../../src/lib/sw-download.js");
     vi.mocked(opfs.ensureSwController).mockResolvedValueOnce(
       {} as unknown as Awaited<ReturnType<typeof opfs.ensureSwController>>,
     );
@@ -1228,7 +1228,7 @@ describe("useDownload", () => {
   it("download() hands the archive size to the Service Worker", async () => {
     const apiMod = await import("../../src/lib/api.js");
     const cryptoMod = await import("@skysend/crypto");
-    const opfs = await import("../../src/lib/opfs-download.js");
+    const opfs = await import("../../src/lib/sw-download.js");
     vi.mocked(cryptoMod.decryptMetadata).mockResolvedValueOnce({
       type: "archive",
       files: [{ name: "a.txt", size: 10 }],
@@ -1253,7 +1253,7 @@ describe("useDownload", () => {
 
   it("download() SW-Tier-1 truncation → phase='error' without a fallback download", async () => {
     const apiMod = await import("../../src/lib/api.js");
-    const opfs = await import("../../src/lib/opfs-download.js");
+    const opfs = await import("../../src/lib/sw-download.js");
     vi.mocked(opfs.ensureSwController).mockResolvedValueOnce(
       {} as unknown as Awaited<ReturnType<typeof opfs.ensureSwController>>,
     );

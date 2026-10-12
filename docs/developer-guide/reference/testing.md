@@ -133,7 +133,7 @@ Without Caddy or Docker, a local run leaves out the setups behind them and says 
 Three checks run wherever a test shares, uploads or downloads:
 
 - **Nothing secret reaches the server.** Each test names what only the sender and the recipient may know: the key from the link fragment, the filenames, passwords, note text and a stretch of each file. After the test, everything the proxy recorded is searched for them, in URLs, headers, request bodies and WebSocket frames. The search runs on the server side because Playwright does not see all traffic in every browser. `guard.spec.ts` makes sure the recording sees what a leak would look like.
-- **The download takes the path meant for the browser.** Chromium and Firefox download through the Service Worker (tier 1), WebKit through the Blob fallback (tier 3), see [Download Modes](/developer-guide/download-modes). A tier that fails falls through to the next and the download still arrives, so the tests check the tier the app logged as well.
+- **The download takes the path meant for the browser.** Chromium and Firefox download through the Service Worker (tier 1), WebKit through the Blob fallback (tier 4), since its OPFS on Linux reads back an empty file, see [Download Modes](/developer-guide/download-modes). Safari on a Mac takes OPFS (tier 3), which `service-worker.spec.ts` covers in Firefox with Service Workers blocked. A tier that fails falls through to the next and the download still arrives, so the tests check the tier the app logged as well.
 - **Uploads take the transport of the setup.** A broken WebSocket would fall back to chunks without a word, so every upload has to log the transport its setup offers.
 
 | File | Tests |

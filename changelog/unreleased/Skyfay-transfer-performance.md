@@ -1,5 +1,6 @@
 ### ✨ Features
 
+- **web**: Safari downloads large files to disk instead of into memory, so files of several GB arrive instead of crashing the tab, and it warns before a large download only where that is not possible, like in a private window.
 - **server**: `S3_MEMORY_LIMIT` caps the memory that all uploads to S3 hold together, 256MB by default, so many uploads at once slow down instead of running the server out of memory.
 
 ### 🐛 Bug Fixes
@@ -8,6 +9,7 @@
 - **server**: A failed or abandoned upload to S3 storage no longer leaves its uploaded parts in the bucket, where the provider kept billing them.
 - **server**: Uploads to S3 storage that need more than 10,000 parts no longer fail, since the part size grows with the size of the upload.
 - **web**: Uploads in chunks, the fallback when a WebSocket cannot connect, no longer fail in a Chrome incognito window once a file passes 1 to 2 GB.
+- **web**: The technical info of a download no longer claims on a phone, a tablet or a browser other than Firefox that the developer tools are open.
 
 ### 🎨 Improvements
 
@@ -34,3 +36,4 @@
 - **infra**: A benchmark sends large files up and down through the app in Chromium, Chrome, Firefox and WebKit and records the speed of every hop, for one transfer or several side by side, optionally over a slower network or behind Nginx.
 - **infra**: End-to-end tests check that the download service worker controls no page and replaces the registration of an older release.
 - **server**: Unit tests cover the memory limit of S3 uploads and the serving of the files of the app.
+- **infra**: An end-to-end test downloads a file through the browser's private storage, the way Safari now does, in Firefox with Service Workers blocked.

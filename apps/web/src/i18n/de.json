@@ -289,6 +289,8 @@
     "tierSw": "SW-Stream",
     "tierFilePicker": "Speichern-Dialog",
     "tierBlob": "Blob",
+    "tierOpfs": "Browser-Speicher (OPFS)",
+    "tierOpfsShort": "OPFS",
     "transportWs": "WebSocket",
     "transportHttp": "HTTP-Chunks",
     "swPathStream": "ReadableStream",

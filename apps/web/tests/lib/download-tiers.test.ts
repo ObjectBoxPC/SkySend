@@ -5,7 +5,7 @@ vi.mock("@skysend/crypto", () => ({
   createDecryptStream: () => new TransformStream<Uint8Array, Uint8Array>(),
 }));
 
-vi.mock("../../src/lib/opfs-download.js", () => ({
+vi.mock("../../src/lib/sw-download.js", () => ({
   ensureSwController: vi.fn(),
   streamDownloadViaSw: vi.fn().mockResolvedValue(undefined),
 }));
@@ -16,7 +16,7 @@ vi.mock("../../src/lib/utils.js", () => ({
   getBrowserInfo: vi.fn(() => "test"),
 }));
 
-import * as opfs from "../../src/lib/opfs-download.js";
+import * as opfs from "../../src/lib/sw-download.js";
 import { saveDecryptedDownload, type SaveDownloadOptions } from "../../src/lib/download-tiers.js";
 
 function options(overrides: Partial<SaveDownloadOptions> = {}): SaveDownloadOptions {

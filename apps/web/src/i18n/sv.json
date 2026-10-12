@@ -294,6 +294,8 @@
     "tierSw": "SW-ström",
     "tierFilePicker": "Spara-dialog",
     "tierBlob": "Blob",
+    "tierOpfs": "Webbläsarlagring (OPFS)",
+    "tierOpfsShort": "OPFS",
     "transportWs": "WebSocket",
     "transportHttp": "HTTP-block",
     "swPathStream": "ReadableStream",

@@ -306,6 +306,8 @@
     "tierSw": "Strumień SW",
     "tierFilePicker": "Okno zapisu",
     "tierBlob": "Blob",
+    "tierOpfs": "Pamięć przeglądarki (OPFS)",
+    "tierOpfsShort": "OPFS",
     "transportWs": "WebSocket",
     "transportHttp": "Fragmenty HTTP",
     "swPathStream": "ReadableStream",

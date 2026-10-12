@@ -250,6 +250,17 @@ describe("isDevToolsOpen", () => {
     expect(isDevToolsOpen()).toBe(true);
   });
 
+  it("returns false on a touch screen, whose browser bars alone make the gap", () => {
+    vi.stubGlobal("window", {
+      outerWidth: 430,
+      innerWidth: 430,
+      outerHeight: 932,
+      innerHeight: 700,
+      matchMedia: (query: string) => ({ matches: query === "(pointer: coarse)" }),
+    });
+    expect(isDevToolsOpen()).toBe(false);
+  });
+
   it("returns false when window dimensions are normal", () => {
     vi.stubGlobal("window", {
       outerWidth: 1600,

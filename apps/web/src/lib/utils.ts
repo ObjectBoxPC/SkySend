@@ -60,8 +60,12 @@ export function isFirefox(): boolean {
  * panel (bottom/left/right) creates a gap larger than the threshold.
  *
  * Limitation: undocked DevTools in a separate window are not detectable.
+ *
+ * A phone or tablet docks no DevTools, and the address bar and toolbar of its browser alone
+ * make a gap above the threshold, so a touch screen as the main pointer always answers no.
  */
 export function isDevToolsOpen(): boolean {
+  if (window.matchMedia?.("(pointer: coarse)").matches) return false;
   const threshold = 160;
   return (
     window.outerWidth - window.innerWidth > threshold ||

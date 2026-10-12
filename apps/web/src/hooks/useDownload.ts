@@ -15,6 +15,7 @@ import {
 import * as api from "@/lib/api";
 import { saveDecryptedDownload, type DownloadDebugInfo } from "@/lib/download-tiers";
 import { isSafari, isFirefox, isDevToolsOpen, SAFARI_BIG_SIZE, formatBytes } from "@/lib/utils";
+import { opfsFits } from "@/lib/opfs-file";
 
 export type DownloadPhase =
   | "idle"
@@ -260,9 +261,15 @@ export function useDownload() {
           return;
         }
 
-        // Safari large-file warning (like Mozilla Send's noStreams warning).
-        // Show before doing any crypto work.
-        if (!forceSafari && isSafari() && info.size > SAFARI_BIG_SIZE) {
+        // Safari large-file warning (like Mozilla Send's noStreams warning), only where the
+        // file cannot go to disk through OPFS, like in a private window. Show before doing any
+        // crypto work.
+        if (
+          !forceSafari &&
+          isSafari() &&
+          info.size > SAFARI_BIG_SIZE &&
+          !(await opfsFits(info.size))
+        ) {
           setState((s) => ({
             ...s,
             phase: "safari-warning",
