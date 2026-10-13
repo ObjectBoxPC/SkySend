@@ -90,7 +90,6 @@
     "uploading": "Krypterer og laster opp...",
     "encryptingProgress": "Krypterer...",
     "processing": "Behandler...",
-    "packing": "Pakker filer...",
     "uploadComplete": "Opplasting fullført!",
     "shareLink": "Del denne lenken",
     "shareLinkHint": "Krypteringsnøkkelen er i URL-fragmentet - den når aldri serveren.",
@@ -99,6 +98,7 @@
     "newUpload": "Ny opplasting",
     "fileTooLarge": "Filen overskrider maksimalstørrelsen på {{size}}",
     "tooManyFiles": "Maksimalt {{count}} filer per opplasting",
+    "fileListTooLong": "Navnene på disse filene er til sammen for lange for én opplasting. Velg færre filer eller kortere navn.",
     "fileNotReadable": "Den valgte filen kunne ikke leses. Velg den på nytt og prøv igjen."
   },
   "download": {

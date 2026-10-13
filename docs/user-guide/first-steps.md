@@ -37,7 +37,7 @@ SkySend supports uploading multiple files or entire folders:
 1. **Multiple files** - Select multiple files in the file picker, or drag & drop several files at once
 2. **Folders** - Use the folder picker or drag & drop a folder
 
-When uploading multiple files, they are automatically zipped in your browser using [fflate](https://github.com/101arrowz/fflate) before encryption. The server only ever sees a single encrypted blob.
+When uploading multiple files, your browser packs them into one zip while it encrypts and uploads it, without compression, so the upload starts at once. The server only ever sees a single encrypted blob.
 
 The recipient downloads a `.zip` file containing all original files with their names preserved.
 

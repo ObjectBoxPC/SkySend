@@ -85,7 +85,6 @@
     "uploading": "Encrypting & uploading...",
     "encryptingProgress": "Encrypting...",
     "processing": "Processing...",
-    "packing": "Packing files...",
     "uploadComplete": "Upload complete!",
     "shareLink": "Share this link",
     "shareLinkHint": "The encryption key is in the URL fragment - it never reaches the server.",
@@ -94,6 +93,7 @@
     "newUpload": "New upload",
     "fileTooLarge": "File exceeds maximum size of {{size}}",
     "tooManyFiles": "Maximum {{count}} files per upload",
+    "fileListTooLong": "The names of these files are too long together for one upload. Please choose fewer files or shorter names.",
     "fileNotReadable": "The selected file could not be read. Please re-select it and try again."
   },
   "download": {

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { Hono } from "hono";
 import type { Context, MiddlewareHandler, Next } from "hono";
 import { eq } from "drizzle-orm";
+import { MAX_ENCRYPTED_METADATA_BYTES } from "@skysend/crypto";
 import { createTestDb, createTestStorage, insertTestUpload, TEST_UUID, fakeBase64urlToken } from "./helpers.js";
 import { uploads } from "../src/db/schema.js";
 import type { FileStorage } from "../src/storage/filesystem.js";
@@ -448,6 +449,27 @@ describe("routes", () => {
       });
 
       expect(res.status).toBe(401);
+    });
+
+    it("takes the most metadata a client checks for, and nothing beyond", async () => {
+      const post = async (bytes: number) => {
+        const ownerToken = fakeBase64urlToken();
+        dbCtx.db.delete(uploads).where(eq(uploads.id, TEST_UUID)).run();
+        insertTestUpload(dbCtx.db, { ownerToken });
+        const app = new Hono();
+        app.route("/api/meta", metaRoute);
+        return app.request(`/api/meta/${TEST_UUID}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Owner-Token": ownerToken },
+          body: JSON.stringify({
+            encryptedMeta: Buffer.alloc(bytes, 7).toString("base64"),
+            nonce: Buffer.from("test-nonce").toString("base64"),
+          }),
+        });
+      };
+
+      expect((await post(MAX_ENCRYPTED_METADATA_BYTES)).status).toBe(200);
+      expect((await post(MAX_ENCRYPTED_METADATA_BYTES + 1)).status).toBe(400);
     });
 
     it("should reject with wrong owner token", async () => {

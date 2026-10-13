@@ -52,6 +52,7 @@ The UI is served as a page instead of a window, so it works on a machine without
 - `page.goto` to the URL the page is already on, fragment included, is a same-document navigation and reloads nothing. A second visit to the same link, like a sender after "Delivered", needs a fresh `openRecipient()`, which is also what a second visitor really is.
 - A label can collide with a block of the same name: a template field called "Password" shares its name with the Password block's region. `sendToRequest` fills fields by their textbox for that reason, and test data uses distinct labels.
 - `rowMenu(row, item)` opens "More actions" of a row in My Links, an inbox or the template list, `confirm(page, action)` presses the button of the dialog that asks first.
+- Under Playwright, Firefox takes a folder through the `webkitdirectory` input but never answers the click after it, so the folder test of `archive.spec.ts` skips Firefox. WebKit is the engine it is for, since WebKit drops the path of a File it posts to a worker.
 - Cancelling a download is not covered: nothing slows a download down reliably, and in Firefox the Service Worker fetches past Playwright.
 
 ## Crafted notes and large files

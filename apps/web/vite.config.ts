@@ -93,7 +93,6 @@ export default defineConfig(({ command }) => {
         // Browser-only WASM / Web Crypto wrappers
         "src/lib/argon2.ts",
         "src/lib/ssh-keygen.ts",
-        "src/lib/zip.ts",
       ],
     },
   },

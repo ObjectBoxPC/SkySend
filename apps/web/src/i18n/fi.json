@@ -90,7 +90,6 @@
     "uploading": "Salataan ja lähetetään...",
     "encryptingProgress": "Salataan...",
     "processing": "Käsitellään...",
-    "packing": "Pakataan tiedostoja...",
     "uploadComplete": "Lähetys valmis!",
     "shareLink": "Jaa tämä linkki",
     "shareLinkHint": "Salausavain on URL-fragmentissa - se ei koskaan saavuta palvelinta.",
@@ -99,6 +98,7 @@
     "newUpload": "Uusi lähetys",
     "fileTooLarge": "Tiedosto ylittää enimmäiskoon {{size}}",
     "tooManyFiles": "Enintään {{count}} tiedostoa per lähetys",
+    "fileListTooLong": "Näiden tiedostojen nimet ovat yhdessä liian pitkiä yhteen lähetykseen. Valitse vähemmän tiedostoja tai lyhyempiä nimiä.",
     "fileNotReadable": "Valittua tiedostoa ei voitu lukea. Valitse se uudelleen ja yritä uudelleen."
   },
   "download": {

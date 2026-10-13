@@ -34,7 +34,7 @@ features:
     details: Optionally restrict who can upload by connecting any OIDC-compatible provider (PocketID, Authentik, Keycloak, or generic). Download links always remain accessible without login.
   - icon: 📁
     title: Multi-File & Folder Uploads
-    details: Upload multiple files or entire folders. Files are zipped client-side with fflate before encryption - the server sees only one encrypted blob.
+    details: Upload multiple files or entire folders. The browser packs them into one zip while it uploads and encrypts it - the server sees only one encrypted blob.
   - icon: 📝
     title: Encrypted Notes
     details: Share text, passwords, code, Markdown, or SSH keys - all end-to-end encrypted. Supports burn-after-reading, view limits, and password protection.

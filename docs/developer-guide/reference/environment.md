@@ -109,7 +109,7 @@ All file-related variables have been renamed with a `FILE_` prefix (e.g. `MAX_FI
 | --- | --- |
 | Required | No |
 | Type | Integer |
-| Default | `32` |
+| Default | `200` |
 | Range | >= 1 |
 | Description | Maximum files per multi-file upload |
 

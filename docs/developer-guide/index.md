@@ -29,7 +29,7 @@ SkySend is a monorepo managed with pnpm Workspaces, consisting of:
 | Validation | Zod |
 | i18n | react-i18next |
 | Password KDF | Argon2id (WASM) |
-| Zip | fflate |
+| Zip | Own streaming writer in the browser, fflate in the CLI |
 | Monorepo | pnpm Workspaces |
 | Tests | Vitest, Playwright |
 

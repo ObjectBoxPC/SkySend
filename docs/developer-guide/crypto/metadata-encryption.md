@@ -33,7 +33,9 @@ interface ArchiveMetadata {
 }
 ```
 
-`totalSize` is what the recipient sees, `archiveSize` is what the download is checked against. The two differ because the zip compresses its entries and adds its own headers. The uploader only knows `archiveSize` after packing, so the metadata is encrypted after the upload. Archives uploaded by older clients have no `archiveSize`.
+`totalSize` is what the recipient sees, `archiveSize` is what the download is checked against. The two differ by the headers of the zip. The browser stores every entry without compression and writes the zip while the upload reads it, so it knows `archiveSize` before the first byte. The CLI still compresses and learns it after packing. Either way the metadata goes to the server after the upload, and archives uploaded by older clients have no `archiveSize`.
+
+The server takes at most `MAX_ENCRYPTED_METADATA_BYTES` (75,000 bytes, 100,000 characters of base64) of encrypted metadata. The names of all files of an archive travel in it, so the browser checks `encryptedMetadataLength` against that limit before an upload starts, instead of failing once every byte is up.
 
 `expectedPlaintextSize(metadata)` returns the size the decrypted file stream must have: `size` for a single file, `archiveSize` for an archive. See [Streaming Encryption](./streaming-encryption.md#decryption) for why every download checks it.
 

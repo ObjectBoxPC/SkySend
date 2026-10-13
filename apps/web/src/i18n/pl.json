@@ -90,7 +90,6 @@
     "uploading": "Szyfrowanie i przesyłanie...",
     "encryptingProgress": "Szyfrowanie...",
     "processing": "Przetwarzanie...",
-    "packing": "Pakowanie plików...",
     "uploadComplete": "Przesyłanie zakończone!",
     "shareLink": "Udostępnij ten link",
     "shareLinkHint": "Klucz szyfrowania znajduje się we fragmencie URL - nigdy nie trafia na serwer.",
@@ -99,6 +98,7 @@
     "newUpload": "Nowa przesyłka",
     "fileTooLarge": "Plik przekracza maksymalny rozmiar {{size}}",
     "tooManyFiles": "Maksymalnie {{count}} plików na przesyłkę",
+    "fileListTooLong": "Nazwy tych plików są łącznie zbyt długie na jedno przesłanie. Wybierz mniej plików lub krótsze nazwy.",
     "fileNotReadable": "Wybrany plik nie mógł zostać odczytany. Wybierz go ponownie i spróbuj jeszcze raz."
   },
   "download": {

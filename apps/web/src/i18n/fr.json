@@ -90,7 +90,6 @@
     "uploading": "Chiffrement et téléversement...",
     "encryptingProgress": "Chiffrement...",
     "processing": "Traitement...",
-    "packing": "Empaquetage des fichiers...",
     "uploadComplete": "Envoi terminé !",
     "shareLink": "Partager ce lien",
     "shareLinkHint": "La clé de chiffrement est dans le fragment de l'URL - elle n'atteint jamais le serveur.",
@@ -99,6 +98,7 @@
     "newUpload": "Nouvel envoi",
     "fileTooLarge": "Le fichier dépasse la taille maximale de {{size}}",
     "tooManyFiles": "Maximum {{count}} fichiers par envoi",
+    "fileListTooLong": "Les noms de ces fichiers sont trop longs ensemble pour un seul envoi. Veuillez choisir moins de fichiers ou des noms plus courts.",
     "fileNotReadable": "Le fichier sélectionné n'a pas pu être lu. Veuillez le sélectionner à nouveau et réessayer."
   },
   "download": {

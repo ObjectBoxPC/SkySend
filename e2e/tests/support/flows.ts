@@ -50,7 +50,7 @@ export async function readLink(page: Page, label: string, timeout = 30_000) {
   return (await link.textContent()) ?? "";
 }
 
-async function shareLink(page: Page) {
+export async function shareLink(page: Page) {
   return readLink(page, "Share this link");
 }
 

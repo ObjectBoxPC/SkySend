@@ -10,6 +10,9 @@
 - **server**: Uploads to S3 storage that need more than 10,000 parts no longer fail, since the part size grows with the size of the upload.
 - **web**: Uploads in chunks, the fallback when a WebSocket cannot connect, no longer fail in a Chrome incognito window once a file passes 1 to 2 GB.
 - **web**: The technical info of a download no longer claims on a phone, a tablet or a browser other than Firefox that the developer tools are open.
+- **web**: Several files that add up to more than 4 GB arrive as a zip that unzip tools can open, where they reported it as damaged before.
+- **web**: Folders uploaded from Safari keep their subfolders in the zip, where files of the same name in two subfolders overwrote each other.
+- **web**: Files whose names are too long together for the server are refused before the upload starts, instead of failing once every byte is up.
 
 ### 🎨 Improvements
 
@@ -20,10 +23,13 @@
 - **server**: An upload over WebSocket stops as soon as writing to the storage fails, instead of after the browser sent the whole file.
 - **web**: The download service worker only handles downloads and no longer sees every other request of the app, which also makes uploads in chunks faster.
 - **server**: The files of the app are served from memory in one piece, so a page behind a reverse proxy on the same host no longer waits 200 to 400 ms for each of them.
+- **web**: Several files go up while they are packed, with no wait before the upload and without the zip in memory, which made 3 GB of files that do not compress about four times as fast in a test.
 
 ### 🔄 Changed
 
 - **server**: `S3_PART_SIZE` and `S3_CONCURRENCY` default to 8MB and 8 instead of 25MB and 4, which keeps uploads to S3 steadier and needs less memory per upload.
+- **web**: The zip of several files stores them without compression, which leaves most large files the same size and lets the upload start at once.
+- **server**: `FILE_MAX_FILES_PER_UPLOAD` defaults to 200 instead of 32.
 
 ### 📝 Documentation
 
@@ -37,3 +43,5 @@
 - **infra**: End-to-end tests check that the download service worker controls no page and replaces the registration of an older release.
 - **server**: Unit tests cover the memory limit of S3 uploads and the serving of the files of the app.
 - **infra**: An end-to-end test downloads a file through the browser's private storage, the way Safari now does, in Firefox with Service Workers blocked.
+- **web**: Unit tests read the zip of several files back with another zip reader and check its records past 4 GB.
+- **infra**: End-to-end tests check that a folder keeps its subfolders in the zip and that names too long for the server stop an upload before it starts.

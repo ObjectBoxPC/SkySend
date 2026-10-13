@@ -14,7 +14,7 @@ Browser (Client)                              Server
    - fileKey   (AES-256-GCM)
    - metaKey   (AES-256-GCM)
    - authKey   (HMAC-SHA256)
-3. If multi-file: Zip via fflate
+3. If multi-file: zip, written while uploading
 4. Chunked encryption (64KB records)
 5. Encrypt metadata (names, sizes)
 6. Optional: Password via Argon2id

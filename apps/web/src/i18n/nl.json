@@ -90,7 +90,6 @@
     "uploading": "Versleutelen en uploaden...",
     "encryptingProgress": "Versleutelen...",
     "processing": "Verwerken...",
-    "packing": "Bestanden inpakken...",
     "uploadComplete": "Upload voltooid!",
     "shareLink": "Deel deze link",
     "shareLinkHint": "De encryptiesleutel zit in het URL-fragment - deze bereikt nooit de server.",
@@ -99,6 +98,7 @@
     "newUpload": "Nieuwe upload",
     "fileTooLarge": "Bestand overschrijdt de maximale grootte van {{size}}",
     "tooManyFiles": "Maximaal {{count}} bestanden per upload",
+    "fileListTooLong": "De namen van deze bestanden zijn samen te lang voor één upload. Kies minder bestanden of kortere namen.",
     "fileNotReadable": "Het geselecteerde bestand kon niet worden gelezen. Selecteer het opnieuw en probeer het nogmaals."
   },
   "download": {

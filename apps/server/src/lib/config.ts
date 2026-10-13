@@ -101,7 +101,7 @@ const configSchema = z.object({
 
   FILE_MAX_FILES_PER_UPLOAD: z
     .string()
-    .default("32")
+    .default("200")
     .transform((v) => parseInt(v, 10))
     .pipe(z.number().int().positive()),
 

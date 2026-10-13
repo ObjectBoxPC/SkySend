@@ -15,13 +15,11 @@ export function UploadProgress({ phase, progress, speed }: UploadProgressProps) 
   const isIndeterminate = phase === "saving-meta";
 
   const label =
-    phase === "zipping"
-      ? t("upload.packing")
-      : phase === "uploading"
-        ? t("upload.uploading")
-        : phase === "saving-meta"
-          ? t("upload.processing")
-          : "";
+    phase === "uploading"
+      ? t("upload.uploading")
+      : phase === "saving-meta"
+        ? t("upload.processing")
+        : "";
 
   return (
     <div className="space-y-3">
@@ -29,7 +27,7 @@ export function UploadProgress({ phase, progress, speed }: UploadProgressProps) 
         <Loader2 className="h-4 w-4 animate-spin text-primary-text" />
         <span className="text-sm font-medium">{label}</span>
         <span className="ml-auto flex items-center gap-3 text-xs tabular-nums text-muted-foreground">
-          {speed && (phase === "uploading" || phase === "zipping") && (
+          {speed && phase === "uploading" && (
             <span>{speed}</span>
           )}
           {!isIndeterminate && <span>{progress}%</span>}

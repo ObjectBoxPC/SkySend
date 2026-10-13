@@ -42,7 +42,7 @@ describe("config", () => {
       expect(config.RATE_LIMIT_MAX).toBe(60);
       expect(config.FILE_UPLOAD_QUOTA_BYTES).toBe(0);
       expect(config.FILE_UPLOAD_QUOTA_WINDOW).toBe(86400);
-      expect(config.FILE_MAX_FILES_PER_UPLOAD).toBe(32);
+      expect(config.FILE_MAX_FILES_PER_UPLOAD).toBe(200);
       expect(config.NOTE_MAX_SIZE).toBe(1024 ** 2);
       expect(config.NOTE_EXPIRE_OPTIONS_SEC).toEqual([300, 3600, 86400, 604800]);
       expect(config.NOTE_DEFAULT_EXPIRE_SEC).toBe(86400);

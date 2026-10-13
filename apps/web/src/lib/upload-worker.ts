@@ -33,7 +33,7 @@ import {
 } from "@skysend/crypto";
 import { argon2id } from "hash-wasm";
 import { z } from "zod";
-import { streamingZip } from "./zip";
+import { zipSize, zipStream } from "./zip";
 
 const hashWasmArgon2: Argon2idHashFn = async (
   password: Uint8Array,
@@ -76,7 +76,7 @@ function holdOf(answer: unknown): string | undefined {
 export interface UploadWorkerRequest {
   /** File to upload (single-file mode). */
   file?: File;
-  /** Files to zip and upload (multi-file mode). */
+  /** Files to zip and upload (multi-file mode), named in the zip as `metadata` lists them. */
   files?: File[];
   /** Master secret (32 bytes). Transferred. */
   secret: ArrayBuffer;
@@ -113,7 +113,6 @@ export interface UploadWorkerRequest {
 export type UploadWorkerMessage =
   | { type: "phase"; phase: string }
   | { type: "progress"; loaded: number; total: number }
-  | { type: "pack-done"; durationMs: number; inputBytes: number; outputBytes: number }
   | { type: "transport"; transport: "ws" | "http"; fallback: boolean }
   | { type: "storage"; backend: "s3" | "filesystem" }
   | {
@@ -169,29 +168,19 @@ self.onmessage = async (e: MessageEvent<UploadWorkerRequest>) => {
     if (msg.file) {
       plaintextStream = msg.file.stream();
       plaintextSize = msg.file.size;
-    } else if (msg.files && msg.files.length > 0) {
-      // Streaming ZIP: read files one at a time, report byte-accurate progress
-      const inputBytes = msg.files.reduce((sum, f) => sum + f.size, 0);
-      post({ type: "phase", phase: "zipping" });
-      const packStart = Date.now();
-      const zipResult = await streamingZip(msg.files, (bytesRead, totalBytes) => {
-        post({ type: "progress", loaded: bytesRead, total: totalBytes });
-      });
-      post({ type: "pack-done", durationMs: Date.now() - packStart, inputBytes, outputBytes: zipResult.totalSize });
-      plaintextSize = zipResult.totalSize;
-      // Stream from the chunks array without concatenating into a single buffer
-      // to avoid exceeding the ~2 GB contiguous ArrayBuffer limit.
-      let chunkIndex = 0;
-      plaintextStream = new ReadableStream<Uint8Array>({
-        pull(controller) {
-          if (chunkIndex >= zipResult.chunks.length) {
-            controller.close();
-            return;
-          }
-          controller.enqueue(zipResult.chunks[chunkIndex]!);
-          chunkIndex++;
-        },
-      });
+    } else if (msg.files && msg.files.length > 0 && msg.metadata.type === "archive") {
+      // The zip is written while the upload reads it, under the names the metadata lists, so
+      // the recipient gets exactly the paths they are shown. WebKit drops webkitRelativePath
+      // when it posts a File to a worker, the metadata built on the page keeps it.
+      const names = msg.metadata.files.map((file) => file.name);
+      if (names.length !== msg.files.length) throw new Error("The file list does not match");
+      const entries = msg.files.map((file, i) => ({
+        name: names[i]!,
+        size: file.size,
+        stream: () => file.stream(),
+      }));
+      plaintextSize = zipSize(entries);
+      plaintextStream = zipStream(entries);
     } else {
       throw new Error("No file or zip data provided");
     }
@@ -229,8 +218,8 @@ self.onmessage = async (e: MessageEvent<UploadWorkerRequest>) => {
 
     const encryptedSize = calculateEncryptedSize(plaintextSize);
 
-    // The archive size is only known once the zip is built. The recipient needs
-    // it to tell a complete download from one the server cut short.
+    // The recipient needs the archive size to tell a complete download from one the server
+    // cut short. The page put the same number into the metadata for its size check.
     const metadata: RequestUploadMetadata =
       msg.metadata.type === "archive"
         ? { ...msg.metadata, archiveSize: plaintextSize }

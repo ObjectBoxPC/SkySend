@@ -10,6 +10,7 @@ import {
   REQUEST_NONCE_LENGTH,
   REQUEST_TOKEN_LENGTH,
   REQUEST_VAULT_LENGTH,
+  MAX_ENCRYPTED_METADATA_BYTES,
   META_IV_LENGTH,
   SALT_LENGTH,
   WRAP_CIPHERTEXT_LENGTH,
@@ -115,15 +116,12 @@ const initSchema = z.object({
   hold: z.string().regex(SLOT_HOLD_PATTERN).optional(),
 });
 
-/** The 100 000 base64 characters POST /api/meta accepts, as bytes. */
-const MAX_ENCRYPTED_META_BYTES = 75_000;
-
 const finalizeSchema = z
   .object({
     wrapEnc: base64urlBytes(WRAP_ENC_LENGTH),
     wrapCiphertext: base64urlBytes(WRAP_CIPHERTEXT_LENGTH),
     // At least the AES-GCM tag and one byte of JSON.
-    encryptedMeta: base64urlBytes(17, MAX_ENCRYPTED_META_BYTES),
+    encryptedMeta: base64urlBytes(17, MAX_ENCRYPTED_METADATA_BYTES),
     metaNonce: base64urlBytes(META_IV_LENGTH),
   })
   .strict();

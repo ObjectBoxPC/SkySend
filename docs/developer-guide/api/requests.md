@@ -78,7 +78,7 @@ What a sender sees. Needs `X-Upload-Token`.
   "closesAt": "2026-10-09T12:00:00.000Z",
   "uploadsLeft": 9,
   "maxUploadSize": 2147483648,
-  "maxFilesPerUpload": 32
+  "maxFilesPerUpload": 200
 }
 ```
 

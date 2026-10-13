@@ -26,6 +26,19 @@ export const META_IV_LENGTH = 12;
 export const METADATA_PAD_BLOCK = 1024;
 
 /**
+ * The most bytes of encrypted metadata the server takes, the tag included, for a normal upload
+ * and an upload into a file request alike. Base64 makes 100,000 characters of it.
+ */
+export const MAX_ENCRYPTED_METADATA_BYTES = 75_000;
+
+/** The AES-GCM tag after the padded JSON. */
+const META_TAG_LENGTH = 16;
+
+function paddedLength(json: Uint8Array): number {
+  return Math.max(1, Math.ceil(json.length / METADATA_PAD_BLOCK)) * METADATA_PAD_BLOCK;
+}
+
+/**
  * Whether a value is a byte count: a non-negative safe integer. JSON reads 1e999 as Infinity
  * and 1.5 as a float, and a hand-built blob can carry either.
  */
@@ -108,13 +121,12 @@ export async function encryptMetadata(
   metaKey: CryptoKey,
 ): Promise<EncryptedMetadata> {
   const json = new TextEncoder().encode(JSON.stringify(metadata));
-  const padded = Math.max(1, Math.ceil(json.length / METADATA_PAD_BLOCK)) * METADATA_PAD_BLOCK;
-  const plaintext = new Uint8Array(padded).fill(0x20);
+  const plaintext = new Uint8Array(paddedLength(json)).fill(0x20);
   plaintext.set(json);
   const iv = randomBytes(META_IV_LENGTH);
 
   const ciphertext = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv: asBytes(iv), tagLength: 128 },
+    { name: "AES-GCM", iv: asBytes(iv), tagLength: META_TAG_LENGTH * 8 },
     metaKey,
     asBytes(plaintext),
   );
@@ -123,6 +135,15 @@ export async function encryptMetadata(
     ciphertext: new Uint8Array(ciphertext),
     iv,
   };
+}
+
+/**
+ * The length of the ciphertext encryptMetadata makes of this metadata. A client checks it
+ * against MAX_ENCRYPTED_METADATA_BYTES before an upload, since the server only gets the
+ * metadata once the file is up.
+ */
+export function encryptedMetadataLength(metadata: RequestUploadMetadata): number {
+  return paddedLength(new TextEncoder().encode(JSON.stringify(metadata))) + META_TAG_LENGTH;
 }
 
 /**

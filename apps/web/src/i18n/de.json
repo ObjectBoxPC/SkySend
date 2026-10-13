@@ -85,7 +85,6 @@
     "uploading": "Verschlüsseln & Hochladen...",
     "encryptingProgress": "Verschlüsseln...",
     "processing": "Verarbeitung...",
-    "packing": "Dateien packen...",
     "uploadComplete": "Upload abgeschlossen!",
     "shareLink": "Diesen Link teilen",
     "shareLinkHint": "Der Schlüssel befindet sich im URL-Fragment - er erreicht niemals den Server.",
@@ -94,6 +93,7 @@
     "newUpload": "Neuer Upload",
     "fileTooLarge": "Datei überschreitet maximale Größe von {{size}}",
     "tooManyFiles": "Maximal {{count}} Dateien pro Upload",
+    "fileListTooLong": "Die Namen dieser Dateien sind zusammen zu lang für einen Upload. Bitte wählen Sie weniger Dateien oder kürzere Namen.",
     "fileNotReadable": "Die ausgewählte Datei konnte nicht gelesen werden. Bitte wählen Sie sie erneut aus und versuchen Sie es noch einmal."
   },
   "download": {
