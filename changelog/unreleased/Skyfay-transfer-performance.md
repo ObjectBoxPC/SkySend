@@ -1,7 +1,7 @@
 ### ✨ Features
 
 - **web**: Safari downloads large files to disk instead of into memory, so files of several GB arrive instead of crashing the tab, and it warns before a large download only where that is not possible, like in a private window.
-- **server**: `S3_MEMORY_LIMIT` caps the memory that all uploads to S3 hold together, 256MB by default, so many uploads at once slow down instead of running the server out of memory.
+- **server**: `S3_MEMORY_LIMIT` caps the memory that all uploads to S3 hold together, by default a quarter of the memory the server may use and at most 256MB, so many uploads at once slow down instead of running the server out of memory.
 
 ### 🐛 Bug Fixes
 
@@ -14,6 +14,11 @@
 - **web**: Folders uploaded from Safari keep their subfolders in the zip, where files of the same name in two subfolders overwrote each other.
 - **web**: Files whose names are too long together for the server are refused before the upload starts, instead of failing once every byte is up.
 - **web**: A download in Firefox streams straight to disk again when the page sat open for half a minute before it started, instead of falling back to a slower way after five seconds.
+
+### 🔒 Security
+
+- **server**: Opening an upload over WebSocket counts against the rate limit like any other upload, and a connection that does not start its upload within 30 seconds is closed. Thanks @barnessomer ([GHSA-rmc2-p8pp-4vmh](https://github.com/Skyfay/SkySend/security/advisories/GHSA-rmc2-p8pp-4vmh))
+- **server**: All uploads over WebSocket together hold at most `FILE_UPLOAD_WS_MEMORY_LIMIT` in memory and slow down once it is reached, so many uploads at once can no longer run the server out of memory. Thanks @barnessomer ([GHSA-rmc2-p8pp-4vmh](https://github.com/Skyfay/SkySend/security/advisories/GHSA-rmc2-p8pp-4vmh))
 
 ### 🎨 Improvements
 
@@ -36,6 +41,7 @@
 ### 📝 Documentation
 
 - **docs**: The S3 guide now explains how to set a lifecycle rule that removes incomplete multipart uploads.
+- **docs**: The rate limiting guide explains that people behind one address share one count and when to raise `RATE_LIMIT_MAX`.
 
 ### 🧪 Tests
 
@@ -48,5 +54,6 @@
 - **web**: Unit tests read the zip of several files back with another zip reader and check its records past 4 GB.
 - **web**: Unit tests cover the check of the room in browser storage before a download goes there.
 - **web**: Unit tests cover how the download service worker gets its updates and which worker takes a download.
+- **server**: Unit tests cover the rate limit of uploads over WebSocket, their shared memory budget and the timeout before their start.
 - **infra**: End-to-end tests check that a folder keeps its subfolders in the zip and that names too long for the server stop an upload before it starts.
 - **infra**: An end-to-end test starts a download in Firefox after the browser stopped the idle download service worker.

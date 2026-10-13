@@ -31,6 +31,7 @@ Complete reference of all environment variables supported by SkySend.
 | `FILE_UPLOAD_SPEED_LIMIT` | ❌ | `0` (unlimited) | Maximum upload speed per session in bytes per second. `0` disables the limit. Supports units: `B`, `KB`, `MB`, `GB` (e.g. `100MB` for 100 MB/s). |
 | `FILE_UPLOAD_WS` | ❌ | `true` | Enable the WebSocket upload transport. Uploads are streamed over a single persistent connection, bypassing HTTP/2 multiplexing bottlenecks in reverse proxies (Traefik, Nginx) and significantly improving upload speed in Chromium browsers. Clients automatically fall back to HTTP chunked uploads when the WebSocket handshake fails. Set to `false` in environments where WebSockets are blocked or terminated. |
 | `FILE_UPLOAD_WS_MAX_BUFFER` | ❌ | `16MB` | Maximum bytes the server may buffer per WebSocket upload session before aborting it. Only relevant when the storage backend cannot keep up with the incoming frame rate. Supports units: `B`, `KB`, `MB`, `GB`. Minimum `1MB`. |
+| `FILE_UPLOAD_WS_MEMORY_LIMIT` | ❌ | a quarter of the memory, at most `256MB` | Most memory all WebSocket uploads together, those into a [file request](/user-guide/file-requests) included, hold in buffers on their way to storage. When it is reached, the uploads that send next wait and slow down, instead of the server running out of memory. The default is a quarter of the memory the server may use, the limit of its container if it runs in one, and at most `256MB`. Minimum `1MB`. |
 
 The default expiry options translate to:
 - 5 minutes (`300`)
@@ -108,7 +109,7 @@ A file request is a link you send to someone so they can upload files to you, en
 | `S3_PRESIGNED_EXPIRY` | ❌ | `300` | Presigned download URL expiry in seconds. |
 | `S3_PART_SIZE` | ❌ | `8MB` | Size of each S3 multipart upload part. Smaller parts keep uploads steadier and use less memory, larger ones take fewer requests. An upload that would need more than 10,000 parts uses larger ones on its own. Minimum is `5MB` (S3 requirement). |
 | `S3_CONCURRENCY` | ❌ | `8` | Number of S3 parts uploaded in parallel per upload. Higher values improve throughput but use more memory and bandwidth. Range: 1-16. |
-| `S3_MEMORY_LIMIT` | ❌ | `256MB` | Most memory all uploads to S3 together hold in parts on their way to the bucket. When it is reached, the next part waits and the senders slow down, instead of the server running out of memory. Minimum is `5MB`. |
+| `S3_MEMORY_LIMIT` | ❌ | a quarter of the memory, at most `256MB` | Most memory all uploads to S3 together hold in parts on their way to the bucket. When it is reached, the next part waits and the senders slow down, instead of the server running out of memory. The default is a quarter of the memory the server may use, the limit of its container if it runs in one, and at most `256MB`. Minimum is `5MB`. |
 
 → See [S3 Storage](/user-guide/configuration/s3) for provider examples and CORS configuration.
 

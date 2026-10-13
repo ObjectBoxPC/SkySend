@@ -7,6 +7,16 @@ import type { UpgradeWebSocket, WSContext, WSEvents, WSMessageReceive } from "ho
 export function createFakeWs() {
   const sent: Array<string | Uint8Array> = [];
   let closeInfo: { code?: number; reason?: string } | null = null;
+  // The raw socket the session layer pauses and resumes for backpressure.
+  const raw = {
+    paused: false,
+    pause() {
+      this.paused = true;
+    },
+    resume() {
+      this.paused = false;
+    },
+  };
 
   const ws = {
     send: (data: string | ArrayBuffer | Uint8Array) => {
@@ -26,12 +36,13 @@ export function createFakeWs() {
     binaryType: "arraybuffer" as BinaryType,
     url: null,
     protocol: null,
-    raw: undefined,
+    raw,
   } as unknown as WSContext;
 
   return {
     ws,
     sent,
+    raw,
     get closed() {
       return closeInfo;
     },

@@ -33,7 +33,11 @@ import { getClientIp } from "../middleware/rate-limit.js";
 import type { OidcGuardVariables } from "../middleware/oidc-guard.js";
 import type { createUploadQuota, QuotaReservation } from "../middleware/quota.js";
 import { requestServiceGuard } from "../middleware/request-service.js";
-import { createWsUploadHandler, type WsUploadRefusal } from "../lib/ws-upload.js";
+import {
+  createWsUploadHandler,
+  type WsBufferMemory,
+  type WsUploadRefusal,
+} from "../lib/ws-upload.js";
 import { createSlotHolds, SLOT_HOLD_PATTERN, type SlotHold } from "../lib/slot-holds.js";
 import type { StorageBackend } from "../storage/types.js";
 import type { QuotaVariables } from "../types.js";
@@ -284,6 +288,8 @@ export interface RequestRouteOptions {
   quota?: Pick<ReturnType<typeof createUploadQuota>, "middleware" | "reserve">;
   /** Turns on the WebSocket transport, the same as for normal uploads (FILE_UPLOAD_WS). */
   upgradeWebSocket?: UpgradeWebSocket;
+  /** The buffer budget the WebSocket uploads share with normal ones, needed with the transport. */
+  wsMemory?: WsBufferMemory;
 }
 
 /**
@@ -302,6 +308,7 @@ export function createRequestRoute({
   createGuard,
   quota,
   upgradeWebSocket,
+  wsMemory,
 }: RequestRouteOptions) {
   const route = new Hono<{ Variables: QuotaVariables & Partial<OidcGuardVariables> }>();
   route.use("*", requestServiceGuard);
@@ -637,6 +644,8 @@ export function createRequestRoute({
    * part. Registered when FILE_UPLOAD_WS is on.
    */
   if (upgradeWebSocket) {
+    if (!wsMemory) throw new Error("The WebSocket transport needs the shared buffer memory");
+    const memory = wsMemory;
     const refuse = (status: number, error: string): WsUploadRefusal => ({
       error,
       code: 1008,
@@ -648,6 +657,7 @@ export function createRequestRoute({
         {
           storage,
           upgradeWebSocket,
+          memory,
         },
         {
           async open(init, { c, ip }) {

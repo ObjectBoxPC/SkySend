@@ -4,6 +4,7 @@ import { readdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createTestDb, createTestStorage } from "./helpers.js";
 import { createFakeWs, createMockUpgrade, msgEvent } from "./ws-helpers.js";
+import type { WSContext, WSEvents } from "hono/ws";
 import { uploads } from "../src/db/schema.js";
 import type { FileStorage } from "../src/storage/filesystem.js";
 
@@ -20,6 +21,7 @@ vi.mock("../src/lib/config.js", () => ({
 import { getDb } from "../src/db/index.js";
 import { getConfig } from "../src/lib/config.js";
 import { createUploadWsRoute, type UploadWsRouteDeps } from "../src/routes/upload-ws.js";
+import { WsBufferMemory } from "../src/lib/ws-upload.js";
 
 const DEFAULT_CONFIG = {
   PORT: 3000,
@@ -39,6 +41,7 @@ const DEFAULT_CONFIG = {
   FILE_UPLOAD_SPEED_LIMIT: 0,
   FILE_UPLOAD_WS: true,
   FILE_UPLOAD_WS_MAX_BUFFER: 16 * 1024 * 1024,
+  FILE_UPLOAD_WS_MEMORY_LIMIT: 256 * 1024 * 1024,
   NOTE_MAX_SIZE: 1024 ** 2,
   NOTE_EXPIRE_OPTIONS_SEC: [300, 3600, 86400, 604800],
   NOTE_DEFAULT_EXPIRE_SEC: 86400,
@@ -105,6 +108,7 @@ describe("upload-ws route", () => {
     const route = createUploadWsRoute({
       storage,
       upgradeWebSocket: mock.upgrade,
+      memory: new WsBufferMemory(DEFAULT_CONFIG.FILE_UPLOAD_WS_MEMORY_LIMIT),
       quota: { reserve: () => ({ ok: true, reservation: null }) },
     });
     // Trigger the middleware to install the event handlers.
@@ -271,6 +275,7 @@ describe("upload-ws route", () => {
     const route = createUploadWsRoute({
       storage,
       upgradeWebSocket: mock.upgrade,
+      memory: new WsBufferMemory(DEFAULT_CONFIG.FILE_UPLOAD_WS_MEMORY_LIMIT),
       quota: {
         reserve: () => ({ ok: false, status: 429, reason: "Upload quota exceeded. Try again later." }),
       },
@@ -359,6 +364,7 @@ describe("upload-ws route", () => {
     const route = createUploadWsRoute({
       storage,
       upgradeWebSocket: mock.upgrade,
+      memory: new WsBufferMemory(DEFAULT_CONFIG.FILE_UPLOAD_WS_MEMORY_LIMIT),
       quota: {
         reserve: () => ({
           ok: true,
@@ -396,6 +402,7 @@ describe("upload-ws route", () => {
     const route = createUploadWsRoute({
       storage,
       upgradeWebSocket: mock.upgrade,
+      memory: new WsBufferMemory(DEFAULT_CONFIG.FILE_UPLOAD_WS_MEMORY_LIMIT),
       quota: { reserve: () => ({ ok: true, reservation }) },
     });
     await route.request("/", { method: "GET" });
@@ -421,6 +428,7 @@ describe("upload-ws route", () => {
     const route = createUploadWsRoute({
       storage,
       upgradeWebSocket: mock.upgrade,
+      memory: new WsBufferMemory(DEFAULT_CONFIG.FILE_UPLOAD_WS_MEMORY_LIMIT),
       quota: { reserve: () => ({ ok: true, reservation }) },
     });
     await route.request("/", { method: "GET" });
@@ -450,6 +458,7 @@ describe("upload-ws route", () => {
     const route = createUploadWsRoute({
       storage,
       upgradeWebSocket: mock.upgrade,
+      memory: new WsBufferMemory(DEFAULT_CONFIG.FILE_UPLOAD_WS_MEMORY_LIMIT),
       quota: { reserve },
     });
     await route.request("/", { method: "GET" });
@@ -555,12 +564,129 @@ describe("upload-ws route", () => {
     expect(new Uint8Array(row!.passwordSalt!)).toEqual(passwordSalt);
   });
 
+  // -- Shared buffer budget and init timeout (GHSA-rmc2-p8pp-4vmh) --
+
+  /** A deferred, to gate a storage write so a buffer stays in memory. */
+  function deferred() {
+    let resolve!: () => void;
+    const promise = new Promise<void>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+
+  /** A route and its handlers over a shared budget of `limit` bytes. */
+  async function bootstrapShared(limit: number) {
+    const memory = new WsBufferMemory(limit);
+    const mock = createMockUpgrade();
+    const route = createUploadWsRoute({
+      storage,
+      upgradeWebSocket: mock.upgrade,
+      memory,
+      quota: { reserve: () => ({ ok: true, reservation: null }) },
+    });
+    await route.request("/", { method: "GET", headers: { "X-Forwarded-For": "127.0.0.1" } });
+    return { events: mock.getEvents(), memory };
+  }
+
+  async function init(events: WSEvents, ws: WSContext, contentLength: number) {
+    await events.onOpen?.(new Event("open"), ws);
+    await events.onMessage!(
+      msgEvent(
+        JSON.stringify({ type: "init", headers: buildHeaders({ contentLength: String(contentLength) }) }),
+      ),
+      ws,
+    );
+  }
+
+  it("pauses a sender once all WebSocket uploads together fill the shared budget", async () => {
+    const { events, memory } = await bootstrapShared(4 * 1024 * 1024);
+    const write = deferred();
+    vi.spyOn(storage, "appendChunk").mockImplementation(async () => {
+      await write.promise;
+    });
+
+    const a = createFakeWs();
+    await init(events, a.ws, 16 * 1024 * 1024);
+    // 5 MB passes the 4 MB flush threshold and the 4 MB shared budget.
+    await events.onMessage!(msgEvent(new Uint8Array(5 * 1024 * 1024).buffer), a.ws);
+    expect(a.raw.paused).toBe(true);
+    expect(memory.full()).toBe(true);
+
+    // A second upload with only a small frame pauses at once, because the budget is full.
+    const b = createFakeWs();
+    await init(events, b.ws, 16 * 1024 * 1024);
+    await events.onMessage!(msgEvent(new Uint8Array(1024).buffer), b.ws);
+    expect(b.raw.paused).toBe(true);
+
+    // The first upload's write lands, frees the budget and resumes both. The second one wrote
+    // its small buffer at once when it paused instead of holding it, so nothing is left.
+    write.resolve();
+    await vi.waitFor(() => expect(a.raw.paused).toBe(false));
+    await vi.waitFor(() => expect(b.raw.paused).toBe(false));
+    await vi.waitFor(() => expect(memory.bytes).toBe(0));
+  });
+
+  it("gives the budget back when a paused upload's socket closes", async () => {
+    const { events, memory } = await bootstrapShared(4 * 1024 * 1024);
+    const write = deferred();
+    vi.spyOn(storage, "appendChunk").mockImplementation(async () => {
+      await write.promise;
+    });
+    const a = createFakeWs();
+    await init(events, a.ws, 16 * 1024 * 1024);
+    await events.onMessage!(msgEvent(new Uint8Array(5 * 1024 * 1024).buffer), a.ws);
+    expect(memory.full()).toBe(true);
+
+    // Closing waits for the write in flight, so the abort cannot race it.
+    const closing = events.onClose!(new CloseEvent("close"), a.ws);
+    write.resolve();
+    await closing;
+    expect(memory.bytes).toBe(0);
+  });
+
+  it("does not time out a sender the server is holding back", async () => {
+    vi.useFakeTimers();
+    try {
+      const { events } = await bootstrapShared(4 * 1024 * 1024);
+      const write = deferred();
+      vi.spyOn(storage, "appendChunk").mockImplementation(async () => {
+        await write.promise;
+      });
+      const a = createFakeWs();
+      await init(events, a.ws, 100 * 1024 * 1024);
+      await events.onMessage!(msgEvent(new Uint8Array(5 * 1024 * 1024).buffer), a.ws);
+      expect(a.raw.paused).toBe(true);
+
+      // Three progress windows pass while the sender waits for room, well past the timeout.
+      await vi.advanceTimersByTimeAsync(31 * 60 * 1000);
+      expect(a.closed).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("closes a connection that never sends its init", async () => {
+    vi.useFakeTimers();
+    try {
+      const { events } = await bootstrapShared(4 * 1024 * 1024);
+      const ws = createFakeWs();
+      await events.onOpen?.(new Event("open"), ws.ws);
+      await vi.advanceTimersByTimeAsync(30_001);
+      expect(ws.closed?.code).toBe(1008);
+      expect(ws.lastJson()).toMatchObject({ type: "error", message: "Init timed out" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("gives the quota reservation back when the socket closes while init runs", async () => {
     const mock = createMockUpgrade();
     const reservation = { commit: vi.fn(), release: vi.fn() };
     const route = createUploadWsRoute({
       storage,
       upgradeWebSocket: mock.upgrade,
+      memory: new WsBufferMemory(DEFAULT_CONFIG.FILE_UPLOAD_WS_MEMORY_LIMIT),
       quota: { reserve: () => ({ ok: true, reservation }) },
     });
     await route.request("/", { method: "GET" });

@@ -90,7 +90,7 @@ Uploads take the same two transports as [normal uploads](/developer-guide/api/up
 
 ### GET /api/request/:id/upload/ws
 
-The WebSocket transport of normal uploads, with the same frames, buffering, backpressure and keepalive. Only the init and the finalize frame differ:
+The WebSocket transport of normal uploads, with the same frames, buffering, backpressure and keepalive, the same rate limit on the upgrade, the same 30 seconds to send the init and the buffer budget `FILE_UPLOAD_WS_MEMORY_LIMIT` shared with normal uploads. Only the init and the finalize frame differ:
 
 ```json
 { "type": "init", "request": { "uploadToken": "<32 bytes>", "salt": "<32 bytes>", "contentLength": 1048624, "fileCount": 1 } }

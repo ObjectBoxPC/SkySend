@@ -8,6 +8,10 @@ Every limit on this page counts per client address. An IPv6 client counts per /6
 
 Rate limiting applies to all API endpoints using a sliding window algorithm per IP address. Controlled via `RATE_LIMIT_WINDOW` (milliseconds) and `RATE_LIMIT_MAX` (requests per window, default: 60 per minute).
 
+Every request that opens an upload counts: the init of an upload in chunks and the WebSocket connection of an upload over WebSocket alike, for normal uploads and uploads into a file request. The chunks of an upload do not count, the server bounds them per upload instead.
+
+Many people behind one address, like the staff of a company behind one NAT gateway, share one count. Raise `RATE_LIMIT_MAX` for such an instance. Behind a reverse proxy, set `TRUST_PROXY=true`, or every client counts as the proxy.
+
 Every response includes rate limit headers:
 
 ```
@@ -17,6 +21,10 @@ X-RateLimit-Reset: 1704067260000
 ```
 
 When the limit is exceeded, the server returns `429 Too Many Requests`.
+
+## Upload Memory
+
+Uploads over WebSocket hold what they receive in memory until it is written to storage. All of them together hold at most `FILE_UPLOAD_WS_MEMORY_LIMIT`, and uploads to S3 hold at most `S3_MEMORY_LIMIT` in parts on their way to the bucket. Both default to a quarter of the memory the server may use, at most 256 MB. When a limit is reached, uploads wait and slow down instead of the server running out of memory, and none is turned away, so this does not depend on addresses. A WebSocket connection that does not start its upload within 30 seconds is closed.
 
 ## Upload Quotas
 

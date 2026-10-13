@@ -62,6 +62,59 @@ export interface WsUploadTarget<M> {
   abandon?(meta: M): void;
 }
 
+/**
+ * The bytes all WebSocket uploads hold together in buffers and writes on their way to storage,
+ * at most FILE_UPLOAD_WS_MEMORY_LIMIT. A session that receives while it is over pauses its
+ * socket, and a write that frees room lets the waiting sessions go on, the longest waiting
+ * first. Nothing is refused, so many uploads at once, from one address or from many, slow down
+ * instead of running the server out of memory (GHSA-rmc2-p8pp-4vmh). One instance serves the
+ * normal uploads and the uploads into a file request.
+ */
+export class WsBufferMemory {
+  private used = 0;
+  private readonly waiting = new Set<() => boolean>();
+
+  constructor(private readonly limit: number) {}
+
+  /** The bytes held right now. */
+  get bytes(): number {
+    return this.used;
+  }
+
+  /** Takes the bytes of a frame that went into a buffer. */
+  take(bytes: number): void {
+    this.used += bytes;
+  }
+
+  /** Gives back bytes that were written out or dropped, and lets waiting sessions go on. */
+  give(bytes: number): void {
+    this.used -= bytes;
+    for (const resume of this.waiting) {
+      if (this.crowded()) break;
+      if (resume()) this.waiting.delete(resume);
+    }
+  }
+
+  /** Over the limit, so a session that receives now pauses. */
+  full(): boolean {
+    return this.used > this.limit;
+  }
+
+  /** Above three quarters of the limit, so a paused session keeps waiting. */
+  crowded(): boolean {
+    return this.used > this.limit * 0.75;
+  }
+
+  /** Keeps a paused session until a release finds room. `resume` answers whether it went on. */
+  wait(resume: () => boolean): void {
+    this.waiting.add(resume);
+  }
+
+  forget(resume: () => boolean): void {
+    this.waiting.delete(resume);
+  }
+}
+
 type Stage = "receiving" | "finalizing" | "closed";
 
 /** The stage of a session read anew, since another handler may change it during an await. */
@@ -86,6 +139,10 @@ interface Session<M> {
   backpressureError: Error | null;
   /** Whether the underlying TCP socket is paused for backpressure. */
   paused: boolean;
+  /** Whether the server paused the socket in the current progress window. */
+  heldInWindow: boolean;
+  /** Lets the session go on once it and the shared budget have room, see WsBufferMemory. */
+  resume: () => boolean;
   /** Set when the socket closed while finalize was running, so finalize does not commit. */
   clientGone: boolean;
   /** Start of the current progress window and the bytes received when it began. */
@@ -111,9 +168,14 @@ interface PendingInit {
  */
 const FLUSH_DELAY_MS = 1000;
 
+/** How long a connection may stay open before it sends its init. */
+const INIT_TIMEOUT_MS = 30_000;
+
 export interface WsUploadDeps {
   storage: StorageBackend;
   upgradeWebSocket: UpgradeWebSocket;
+  /** The budget all WebSocket uploads share, one instance for every handler. */
+  memory: WsBufferMemory;
 }
 
 function isRefusal(value: unknown): value is WsUploadRefusal {
@@ -122,12 +184,19 @@ function isRefusal(value: unknown): value is WsUploadRefusal {
 
 /** Builds the WebSocket handler of one kind of upload. */
 export function createWsUploadHandler<M>(deps: WsUploadDeps, target: WsUploadTarget<M>) {
-  const { storage, upgradeWebSocket } = deps;
+  const { storage, upgradeWebSocket, memory } = deps;
 
   /** Threshold above which buffered frames are flushed to storage. */
   const FLUSH_THRESHOLD = 4 * 1024 * 1024; // 4 MB
 
   const sessions = new WeakMap<WSContext, Session<M> | PendingInit>();
+  const initTimers = new WeakMap<WSContext, ReturnType<typeof setTimeout>>();
+
+  function clearInitTimer(ws: WSContext): void {
+    const timer = initTimers.get(ws);
+    if (timer) clearTimeout(timer);
+    initTimers.delete(ws);
+  }
 
   /**
    * Flush pre-detached chunks to storage.
@@ -142,12 +211,9 @@ export function createWsUploadHandler<M>(deps: WsUploadDeps, target: WsUploadTar
     total: number,
   ): Promise<void> {
     if (total === 0) return;
-    // Skip write if the session was already closed/aborted.
-    if (session.stage === "closed") {
-      session.pendingWriteSize -= total;
-      return;
-    }
     try {
+      // Skip write if the session was already closed/aborted.
+      if (session.stage === "closed") return;
       const combined = new Uint8Array(total);
       let offset = 0;
       for (const c of chunks) {
@@ -164,6 +230,7 @@ export function createWsUploadHandler<M>(deps: WsUploadDeps, target: WsUploadTar
       await storage.appendChunk(session.id, stream);
     } finally {
       session.pendingWriteSize -= total;
+      memory.give(total);
     }
   }
 
@@ -213,6 +280,10 @@ export function createWsUploadHandler<M>(deps: WsUploadDeps, target: WsUploadTar
   function close(session: Session<M>): Promise<void> {
     session.stage = "closed";
     stopTimers(session);
+    memory.forget(session.resume);
+    memory.give(session.bufferSize);
+    session.buffer = [];
+    session.bufferSize = 0;
     target.abandon?.(session.meta);
     session.quotaReservation?.release();
     return session.writePromise
@@ -225,7 +296,7 @@ export function createWsUploadHandler<M>(deps: WsUploadDeps, target: WsUploadTar
    * Hands the buffer to the write chain. It is detached synchronously, so new frames collect
    * in a fresh buffer while the write, which may be slow on S3, is in flight.
    */
-  function flushBuffer(session: Session<M>, ws: WSContext, maxBuffer: number): void {
+  function flushBuffer(session: Session<M>, ws: WSContext): void {
     if (session.flushTimer) clearTimeout(session.flushTimer);
     session.flushTimer = null;
     if (session.bufferSize === 0) return;
@@ -235,18 +306,11 @@ export function createWsUploadHandler<M>(deps: WsUploadDeps, target: WsUploadTar
     session.bufferSize = 0;
     session.pendingWriteSize += sizeToFlush;
 
-    const resumeThreshold = maxBuffer * 0.5;
     session.writePromise = session.writePromise
       .then(() => flushChunks(session, chunksToFlush, sizeToFlush))
       .then(() => {
         // Resume socket once memory pressure has eased.
-        if (session.paused) {
-          const current = session.bufferSize + session.pendingWriteSize;
-          if (current < resumeThreshold) {
-            session.paused = false;
-            resumeSocket(ws);
-          }
-        }
+        if (session.resume()) memory.forget(session.resume);
       })
       .catch((err) => {
         // Store the error for the finalize handler to detect.
@@ -317,6 +381,21 @@ export function createWsUploadHandler<M>(deps: WsUploadDeps, target: WsUploadTar
     // The upload still goes through quota enforcement and session validation.
     const originAllowed = origin === "" || allowed.includes(origin);
 
+    const maxBuffer = config.FILE_UPLOAD_WS_MAX_BUFFER;
+
+    /**
+     * Resumes a paused session once its own buffer is below half of FILE_UPLOAD_WS_MAX_BUFFER
+     * and the shared budget has room. Answers whether it is going on, a closed one counts.
+     */
+    const resumeOf = (session: Session<M>, ws: WSContext) => (): boolean => {
+      if (session.stage === "closed" || !session.paused) return true;
+      if (session.bufferSize + session.pendingWriteSize >= maxBuffer * 0.5) return false;
+      if (memory.crowded()) return false;
+      session.paused = false;
+      resumeSocket(ws);
+      return true;
+    };
+
     return {
       onOpen: (_evt, ws) => {
         if (!originAllowed) {
@@ -326,11 +405,20 @@ export function createWsUploadHandler<M>(deps: WsUploadDeps, target: WsUploadTar
           } catch {
             /* ignore */
           }
+          return;
         }
+        // A connection that never sends its init would stay open for good.
+        const timer = setTimeout(() => {
+          initTimers.delete(ws);
+          if (!sessions.get(ws)) fail(ws, undefined, "Init timed out", 1008);
+        }, INIT_TIMEOUT_MS);
+        timer.unref?.();
+        initTimers.set(ws, timer);
       },
 
       onMessage: async (evt, ws) => {
         if (!originAllowed) return;
+        clearInitTimer(ws);
         const data = evt.data;
         const entry = sessions.get(ws);
 
@@ -417,6 +505,8 @@ export function createWsUploadHandler<M>(deps: WsUploadDeps, target: WsUploadTar
             writePromise: Promise.resolve(),
             backpressureError: null,
             paused: false,
+            heldInWindow: false,
+            resume: () => true,
             clientGone: false,
             windowStart: Date.now(),
             windowBytes: 0,
@@ -424,6 +514,7 @@ export function createWsUploadHandler<M>(deps: WsUploadDeps, target: WsUploadTar
             flushTimer: null,
           };
           const started = session;
+          started.resume = resumeOf(started, ws);
           started.progressTimer = setInterval(() => {
             if (started.stage === "closed") {
               stopTimers(started);
@@ -432,6 +523,13 @@ export function createWsUploadHandler<M>(deps: WsUploadDeps, target: WsUploadTar
             if (started.stage !== "receiving") return;
             const now = Date.now();
             if (now - started.windowStart < PROGRESS_WINDOW_MS) return;
+            // A window in which the server held the socket back says nothing about the sender.
+            if (started.paused || started.heldInWindow) {
+              started.heldInWindow = started.paused;
+              started.windowStart = now;
+              started.windowBytes = started.bytesReceived;
+              return;
+            }
             const remaining = started.contentLength - started.windowBytes;
             const needed = Math.max(1, Math.min(MIN_PROGRESS_BYTES, remaining));
             if (started.bytesReceived - started.windowBytes < needed) {
@@ -599,6 +697,7 @@ export function createWsUploadHandler<M>(deps: WsUploadDeps, target: WsUploadTar
         session.buffer.push(frame);
         session.bufferSize += frame.byteLength;
         session.bytesReceived += frame.byteLength;
+        memory.take(frame.byteLength);
 
         // ── Backpressure ───────────────────────────────
         // The ws library delivers frames regardless of whether our
@@ -607,22 +706,26 @@ export function createWsUploadHandler<M>(deps: WsUploadDeps, target: WsUploadTar
         // TCP-level backpressure by pausing the raw socket when
         // memory usage is high and resuming when it drops.
         const totalMemory = session.bufferSize + session.pendingWriteSize;
-        const maxBuffer = config.FILE_UPLOAD_WS_MAX_BUFFER;
 
-        // Pause the socket when we've buffered too much.
-        if (!session.paused && totalMemory > maxBuffer * 0.75) {
+        // Pause the socket when this session buffered too much, or all of them together did.
+        if (!session.paused && (totalMemory > maxBuffer * 0.75 || memory.full())) {
           session.paused = true;
+          session.heldInWindow = true;
           pauseSocket(ws);
+          memory.wait(session.resume);
         }
 
-        if (session.bufferSize >= FLUSH_THRESHOLD) {
-          flushBuffer(session, ws, maxBuffer);
+        // A paused session gets no frame before it resumes, so holding its buffer back for the
+        // threshold only keeps the shared budget full. With a small budget that held every
+        // upload to one budget per second.
+        if (session.bufferSize >= FLUSH_THRESHOLD || session.paused) {
+          flushBuffer(session, ws);
         } else if (!session.flushTimer && session.bufferSize > 0) {
           // Armed by the first frame of a buffer and never pushed back by later ones.
           const sessionRef = session;
           sessionRef.flushTimer = setTimeout(() => {
             sessionRef.flushTimer = null;
-            if (sessionRef.stage === "receiving") flushBuffer(sessionRef, ws, maxBuffer);
+            if (sessionRef.stage === "receiving") flushBuffer(sessionRef, ws);
           }, FLUSH_DELAY_MS);
           sessionRef.flushTimer.unref?.();
         }
@@ -636,6 +739,7 @@ export function createWsUploadHandler<M>(deps: WsUploadDeps, target: WsUploadTar
       },
 
       onClose: async (_evt, ws) => {
+        clearInitTimer(ws);
         const entry = sessions.get(ws);
         sessions.delete(ws);
         if (!entry || entry.stage === "closed") return;
