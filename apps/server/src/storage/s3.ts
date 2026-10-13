@@ -137,6 +137,12 @@ export class S3Storage implements StorageBackend {
       // Setting both to WHEN_REQUIRED disables this behavior for non-AWS providers.
       requestChecksumCalculation: "WHEN_REQUIRED",
       responseChecksumValidation: "WHEN_REQUIRED",
+      // With "Expect: 100-continue", which the SDK sends for every body over 2 MB, it opens
+      // a new connection without keep-alive per request, so each part pays a DNS lookup and a
+      // TLS handshake. Behind a resolver that answers parallel lookups slowly, that held
+      // uploads to R2 at 10 MiB/s instead of 68 MiB/s. All the header saves is sending a part
+      // the bucket would reject.
+      expectContinueHeader: false,
     });
   }
 

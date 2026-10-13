@@ -514,6 +514,9 @@ async function uploadViaHttpChunks(opts: HttpUploadOpts): Promise<{ id: string; 
   await Promise.all(active);
   if (uploadError) throw uploadError;
 
+  // Every chunk is in, the server may still be writing them to storage, see uploadViaWebSocket.
+  post({ type: "phase", phase: "saving-meta" });
+
   const finalizeRes = await fetch(paths.finalize(uploadId), await finalizeRequest(uploadId));
   if (!finalizeRes.ok) {
     const data = await finalizeRes.json().catch(() => ({ error: "Upload finalize failed" }));
@@ -891,6 +894,10 @@ async function uploadViaWebSocket(opts: WsUploadOpts): Promise<{ id: string; hol
     reportProgress(true);
 
     if (fatalError) throw fatalError;
+
+    // The server may still be writing what it buffered, to a bucket at the speed of its own
+    // link, which held the bar at 99 % for seconds. The page shows that it is processing.
+    post({ type: "phase", phase: "saving-meta" });
 
     // Send finalize and wait for done.
     ws.send(JSON.stringify({ type: "finalize", ...(finalize ? await finalize(readyId) : {}) }));

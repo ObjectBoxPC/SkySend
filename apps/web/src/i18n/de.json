@@ -82,7 +82,7 @@
     "passwordPlaceholder": "Passwort eingeben (optional)",
     "passwordPlaceholderRequired": "Passwort eingeben (erforderlich)",
     "passwordRequired": "vom Server vorgeschrieben",
-    "uploading": "Verschlüsseln & Hochladen...",
+    "uploading": "Verschlüsseln und hochladen...",
     "encryptingProgress": "Verschlüsseln...",
     "processing": "Verarbeitung...",
     "uploadComplete": "Upload abgeschlossen!",

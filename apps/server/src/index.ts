@@ -25,6 +25,7 @@ import { configRoute } from "./routes/config.js";
 import { createUploadRoute } from "./routes/upload.js";
 import { createUploadWsRoute } from "./routes/upload-ws.js";
 import { WsBufferMemory } from "./lib/ws-upload.js";
+import { bucketConnectSources } from "./lib/bucket-csp.js";
 import { metaRoute } from "./routes/meta.js";
 import { infoRoute } from "./routes/info.js";
 import { createDownloadRoute } from "./routes/download.js";
@@ -92,16 +93,8 @@ if (config.OIDC_ENABLED && config.OIDC_ISSUER) {
     oidcOrigins.push(new URL(config.OIDC_ISSUER).origin);
   } catch { /* invalid URL - already validated in config */ }
 }
-if (config.STORAGE_BACKEND === "s3") {
-  if (config.S3_ENDPOINT) {
-    // Presigned URL mode with custom S3 provider
-    connectSrc.push(config.S3_ENDPOINT.replace(/\/$/, "") + "/");
-  } else if (config.S3_REGION) {
-    // Presigned URL mode with AWS S3
-    connectSrc.push(`https://s3.${config.S3_REGION}.amazonaws.com`);
-    connectSrc.push(`https://*.s3.${config.S3_REGION}.amazonaws.com`);
-  }
-}
+// Presigned S3 downloads go from the browser straight to the bucket, see lib/bucket-csp.ts.
+if (config.STORAGE_BACKEND === "s3") connectSrc.push(...bucketConnectSources(config));
 
 // Allow a custom external logo origin in CSP image sources, local paths remain covered by 'self'.
 const imgSrc: string[] = ["'self'", "data:"];

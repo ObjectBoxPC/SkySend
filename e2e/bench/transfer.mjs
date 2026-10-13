@@ -12,7 +12,7 @@
 // Build first (pnpm test:e2e:build), then for example:
 //   node e2e/bench/transfer.mjs --browser firefox --storage s3 --size 2048
 // See e2e/bench/README.md for every option.
-/* global window -- the recorder and page.evaluate callbacks run in the browser. */
+/* global window, document -- the recorder and page.evaluate callbacks run in the browser. */
 import { spawn, execFileSync } from "node:child_process";
 import { createHash, randomFillSync } from "node:crypto";
 import {
@@ -27,7 +27,7 @@ import {
 import { open } from "node:fs/promises";
 import net from "node:net";
 import { createRequire } from "node:module";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { chromium, firefox, webkit } from "@playwright/test";
 
@@ -40,6 +40,10 @@ const { values: opts } = parseArgs({
     browser: { type: "string", default: "chromium" },
     storage: { type: "string", default: "fs" },
     s3: { type: "string", default: "local" },
+    // With --s3 env, the bucket of a real provider, from the S3_* lines of this env file.
+    "s3-env": { type: "string", default: ".env.dev" },
+    // A Chromium build to drive instead of Playwright's, like /usr/bin/brave-browser.
+    executable: { type: "string" },
     transport: { type: "string", default: "ws" },
     size: { type: "string", default: "1024" },
     label: { type: "string" },
@@ -74,6 +78,19 @@ const { values: opts } = parseArgs({
     direct: { type: "boolean", default: false },
   },
 });
+
+/** The S3 settings of a real bucket, from an env file. Its keys are never printed. */
+function s3FromEnvFile(file) {
+  const env = {};
+  for (const line of readFileSync(resolve(ROOT, file), "utf8").split("\n")) {
+    const match = /^\s*(S3_[A-Z_]+)\s*=\s*(.*?)\s*$/.exec(line);
+    if (match) env[match[1]] = match[2].replace(/^["']|["']$/g, "");
+  }
+  for (const key of ["S3_BUCKET", "S3_ENDPOINT", "S3_ACCESS_KEY", "S3_SECRET_KEY"]) {
+    if (!env[key]) throw new Error(`${file} has no ${key}`);
+  }
+  return { STORAGE_BACKEND: "s3", ...env };
+}
 
 const engines = { chromium, firefox, webkit };
 const engine = engines[opts.browser];
@@ -471,6 +488,16 @@ function cost(samples, from, to) {
 }
 
 const RECORDER = () => {
+  // What the page shows every half second while a transfer runs: the percent of the progress
+  // bar and the text beside it, with the speed. The same bar serves uploads and downloads.
+  const shown = [];
+  Object.defineProperty(window, "__shown", { value: shown });
+  setInterval(() => {
+    const bar = document.querySelector('[role="progressbar"]');
+    if (!bar) return;
+    const text = (bar.parentElement?.innerText ?? "").replace(/\s+/g, " ").slice(0, 120);
+    shown.push({ t: Date.now(), text });
+  }, 500);
   // Wraps Worker so every message the upload worker posts is kept with its time. Only the
   // fields that describe progress are kept, never a whole message, since one carries the secret.
   const log = [];
@@ -496,6 +523,117 @@ const RECORDER = () => {
     }
   };
 };
+
+/**
+ * What the page showed during a transfer: the speeds it displayed in MiB/s, how far they
+ * spread and jumped, and how the percent moved, next to the speed the transfer really had.
+ */
+function shownSummary(shown, start, end, realMiBps) {
+  const inside = shown.filter((s) => s.t >= start && s.t <= end);
+  const speeds = [];
+  const percents = [];
+  // Each reading as [seconds since start, percent, speed in MiB/s], numbers only, never the text.
+  const timeline = [];
+  for (const s of inside) {
+    const speed = /(\d+(?:\.\d+)?)\s*(B|KB|MB|GB)\/s/.exec(s.text);
+    let mibps = null;
+    if (speed) {
+      const factor = { B: 1 / 1024 ** 2, KB: 1 / 1024, MB: 1, GB: 1024 }[speed[2]];
+      mibps = Number(speed[1]) * factor;
+      speeds.push({ t: s.t, mibps });
+    }
+    const percent = /(\d+)%/.exec(s.text);
+    if (percent) percents.push({ t: s.t, value: Number(percent[1]) });
+    timeline.push([(s.t - start) / 1000, percent ? Number(percent[1]) : null, mibps]);
+  }
+  const values = speeds.map((s) => s.mibps).sort((a, b) => a - b);
+  const at = (q) => (values.length ? values[Math.min(values.length - 1, Math.floor(q * values.length))] : null);
+  const mean = values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
+  const sd = mean === null ? null : Math.sqrt(values.reduce((a, b) => a + (b - mean) ** 2, 0) / values.length);
+  // The largest change between two readings half a second apart, relative to the real speed.
+  let jump = 0;
+  for (let i = 1; i < speeds.length; i++) jump = Math.max(jump, Math.abs(speeds[i].mibps - speeds[i - 1].mibps));
+  // Whether the percent ever went back, and how long it stood still at the end.
+  let backwards = false;
+  for (let i = 1; i < percents.length; i++) if (percents[i].value < percents[i - 1].value) backwards = true;
+  const last = percents.at(-1);
+  const firstAtLast = last ? percents.find((p) => p.value === last.value) : null;
+  const round = (v) => (v === null ? null : Math.round(v * 10) / 10);
+  return {
+    readings: inside.length,
+    firstSpeedAfter: speeds.length ? round((speeds[0].t - start) / 1000) : null,
+    shownMiBps: { p10: round(at(0.1)), median: round(at(0.5)), p90: round(at(0.9)), cv: mean ? round(sd / mean) : null },
+    realMiBps: round(realMiBps),
+    largestJumpMiBps: round(jump),
+    percentWentBack: backwards,
+    lastPercent: last?.value ?? null,
+    stoodAtLastPercentSeconds: firstAtLast ? round((end - firstAtLast.t) / 1000) : null,
+    timeline,
+  };
+}
+
+/** A screenshot of the page once its progress bar reached half, while the transfer goes on. */
+function screenshotAtHalf(page, name) {
+  const dir = join(WORK, "screenshots");
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, `${label}-${name}-${Date.now()}.png`);
+  return page
+    .waitForFunction(
+      // The bar carries no aria-valuenow, the percent stands in the text beside it.
+      () => {
+        const text = document.querySelector('[role="progressbar"]')?.parentElement?.innerText ?? "";
+        return Number(/(\d+)%/.exec(text)?.[1] ?? 0) >= 50;
+      },
+      null,
+      { timeout: 30 * 60_000, polling: 250 },
+    )
+    .then(() => page.screenshot({ path }))
+    .then(() => path)
+    .catch((err) => `none: ${String(err.message ?? err).split("\n")[0]}`);
+}
+
+/** Objects and multipart uploads this run left in a real bucket, then removed (--s3 env). */
+async function realBucketCleanup(s3env, dataDir, since) {
+  const s3 = createRequire(join(ROOT, "apps", "server", "package.json"))("@aws-sdk/client-s3");
+  const Database = createRequire(join(ROOT, "apps", "server", "package.json"))("better-sqlite3");
+  const client = new s3.S3Client({
+    region: s3env.S3_REGION || "auto",
+    endpoint: s3env.S3_ENDPOINT,
+    forcePathStyle: s3env.S3_FORCE_PATH_STYLE === "true",
+    credentials: { accessKeyId: s3env.S3_ACCESS_KEY, secretAccessKey: s3env.S3_SECRET_KEY },
+  });
+  const Bucket = s3env.S3_BUCKET;
+  const out = { multipartUploads: 0, parts: 0, deletedObjects: 0 };
+  try {
+    // Multipart uploads still open that this run started: their keys are uploads of this
+    // server, and nothing else writes the bucket meanwhile. Counted first, then aborted.
+    const listed = await client.send(new s3.ListMultipartUploadsCommand({ Bucket }));
+    for (const upload of listed.Uploads ?? []) {
+      if (!/^[0-9a-f-]{36}\.bin$/.test(upload.Key ?? "")) continue;
+      if (!(upload.Initiated && upload.Initiated.getTime() >= since)) continue;
+      const found = await client.send(
+        new s3.ListPartsCommand({ Bucket, Key: upload.Key, UploadId: upload.UploadId }),
+      );
+      out.multipartUploads++;
+      out.parts += found.Parts?.length ?? 0;
+      await client.send(new s3.AbortMultipartUploadCommand({ Bucket, Key: upload.Key, UploadId: upload.UploadId }));
+    }
+    // The stored uploads of this run, by the IDs in its own database, and nothing else.
+    const db = new Database(join(dataDir, "db", "skysend.db"), { readonly: true });
+    const ids = db.prepare("SELECT id FROM uploads").all().map((row) => row.id);
+    db.close();
+    for (let i = 0; i < ids.length; i += 1000) {
+      const Objects = ids.slice(i, i + 1000).map((id) => ({ Key: `${id}.bin` }));
+      const deleted = await client.send(new s3.DeleteObjectsCommand({ Bucket, Delete: { Objects, Quiet: true } }));
+      out.deletedObjects += Objects.length - (deleted.Errors?.length ?? 0);
+    }
+    return out;
+  } catch (err) {
+    return { ...out, error: String(err) };
+  } finally {
+    client.destroy();
+  }
+}
 
 /** Nginx with the server block of the reverse proxy guide, in Docker, through e2e/scripts. */
 async function startNginx() {
@@ -575,6 +713,7 @@ async function singleTransfer(browser, source, result, sampler, counters) {
   await page.locator('input[type="file"]:not([webkitdirectory])').setInputFiles(source.path);
   const uploadStart = Date.now();
   await page.getByRole("button", { name: "Encrypt and upload" }).click();
+  const uploadShot = screenshotAtHalf(page, "upload");
   if (opts["cancel-after"]) {
     await page.waitForTimeout(Number(opts["cancel-after"]) * 1000);
     const events = await page.evaluate(() => window.__bench);
@@ -602,6 +741,9 @@ async function singleTransfer(browser, source, result, sampler, counters) {
   const uploadEnd = Date.now();
   const link = (await linkBox.textContent()) ?? "";
   const events = await page.evaluate(() => window.__bench);
+  const shownUpload = await page.evaluate(() => window.__shown);
+  // The average the finished page shows, like "Ø 45.2 MB/s".
+  const shownAverage = (await page.locator("main").innerText()).match(/Ø\s*[\d.]+\s*[KMG]?B\/s/)?.[0] ?? null;
   const closeStart = Date.now();
   await sender.close();
   const closeEnd = Date.now();
@@ -629,6 +771,11 @@ async function singleTransfer(browser, source, result, sampler, counters) {
     result.upload.s3Rate1s = stats(rates(sampler.samples, "bUp", uploadStart, uploadEnd, 1000));
   result.upload.cost = cost(sampler.samples, uploadStart, uploadEnd);
   // The progress the worker reported, as [time, bytes], for timeline.mjs.
+  result.upload.shown = {
+    ...shownSummary(shownUpload, uploadStart, uploadEnd, SIZE / MIB / ((uploadEnd - uploadStart) / 1000)),
+    average: shownAverage,
+  };
+  result.upload.screenshot = await uploadShot;
   result.upload.progress = progress.map((e) => [e.t, e.loaded]);
   result.upload.wireBytes = { a: counters.a.up, b: counters.b?.up };
   // TCP connections opened so far, to the server and to the bucket.
@@ -641,6 +788,7 @@ async function singleTransfer(browser, source, result, sampler, counters) {
       acceptDownloads: true,
       ignoreHTTPSErrors: true,
     });
+    await recipient.addInitScript(RECORDER);
     const page2 = await recipient.newPage();
     const tiers = [];
     page2.on("console", (message) => {
@@ -656,6 +804,7 @@ async function singleTransfer(browser, source, result, sampler, counters) {
     const downloadStart = Date.now();
     const started = page2.waitForEvent("download", { timeout: 10 * 60_000 });
     await button.click();
+    const downloadShot = screenshotAtHalf(page2, "download");
     // WebKit is Safari to the app, which warns before a download over 256 MiB.
     const anyway = page2.getByRole("button", { name: "Download anyway" });
     const warned = await Promise.race([
@@ -664,9 +813,25 @@ async function singleTransfer(browser, source, result, sampler, counters) {
     ]);
     if (warned) await anyway.click();
     const download = await started;
-    const path = await download.path();
+    // A download that started but stalls, like one whose fetch the browser blocked, would
+    // otherwise hold the run forever.
+    let stall;
+    const path = await Promise.race([
+      download.path(),
+      new Promise((_, reject) => {
+        stall = setTimeout(
+          () => reject(new Error("The download did not finish in 30 minutes")),
+          30 * 60_000,
+        );
+      }),
+    ]).finally(() => clearTimeout(stall));
     const downloadEnd = Date.now();
-    const key = opts.storage === "s3" ? "bDown" : "aDown";
+    const key = opts.storage === "s3" ? (counters.b ? "bDown" : null) : "aDown";
+    // The page keeps showing the bar for a moment, and the average once it is done.
+    await page2.waitForTimeout(1500);
+    const shownDownload = await page2.evaluate(() => window.__shown);
+    const shownDownloadAverage =
+      (await page2.locator("main").innerText()).match(/Ø\s*[\d.]+\s*[KMG]?B\/s/)?.[0] ?? null;
     result.download = {
       seconds: (downloadEnd - downloadStart) / 1000,
       mibPerSecond: Math.round((SIZE / MIB / ((downloadEnd - downloadStart) / 1000)) * 10) / 10,
@@ -677,7 +842,17 @@ async function singleTransfer(browser, source, result, sampler, counters) {
         buttonVisible: (visible - loaded) / 1000,
       },
       tiers,
-      wireRate1s: stats(rates(sampler.samples, key, downloadStart, downloadEnd, 1000)),
+      wireRate1s: key ? stats(rates(sampler.samples, key, downloadStart, downloadEnd, 1000)) : null,
+      shown: {
+        ...shownSummary(
+          shownDownload,
+          downloadStart,
+          downloadEnd,
+          SIZE / MIB / ((downloadEnd - downloadStart) / 1000),
+        ),
+        average: shownDownloadAverage,
+      },
+      screenshot: await downloadShot,
       cost: cost(sampler.samples, downloadStart, downloadEnd),
     };
     if (!opts["no-verify"]) {
@@ -690,8 +865,22 @@ async function singleTransfer(browser, source, result, sampler, counters) {
 
 /** The channel a browser is launched with: the full Chromium unless --channel says otherwise. */
 function launchChannel() {
+  if (opts.executable) return undefined;
   const channel = opts.channel ?? (opts.browser === "chromium" ? "chromium" : undefined);
   return channel && channel !== "shell" ? channel : undefined;
+}
+
+/** How a browser of this run is launched, for the main one and the --separate ones alike. */
+function launchOptions() {
+  const channel = launchChannel();
+  return {
+    downloadsPath: join(WORK, "downloads"),
+    // Chromium refuses a Service Worker from an origin with a certificate error unless the
+    // whole browser ignores such errors, see e2e/CLAUDE.md.
+    ...(opts.proxy && opts.browser === "chromium" ? { args: ["--ignore-certificate-errors"] } : {}),
+    ...(channel ? { channel } : {}),
+    ...(opts.executable ? { executablePath: opts.executable } : {}),
+  };
 }
 
 /** Shares the file through the UI of a fresh context and returns the link. */
@@ -729,13 +918,7 @@ async function mixedTransfers(browser, source, uploads, downloads, result, sampl
   // A context of the shared browser, or of a browser of its own with --separate.
   const contextFor = async (options) => {
     if (!opts.separate) return browser.newContext(options);
-    const own = await engine.launch({
-      downloadsPath: join(WORK, "downloads"),
-      ...(launchChannel() ? { channel: launchChannel() } : {}),
-      ...(opts.proxy && opts.browser === "chromium"
-        ? { args: ["--ignore-certificate-errors"] }
-        : {}),
-    });
+    const own = await engine.launch(launchOptions());
     cleanups.push(() => own.close());
     return own.newContext(options);
   };
@@ -905,7 +1088,11 @@ async function main() {
   const counters = { a: null, b: null };
   let storageEnv = {};
   let store = null;
-  if (opts.storage === "s3") {
+  const realBucket = opts.storage === "s3" && opts.s3 === "env";
+  if (realBucket) {
+    // A real provider signs its requests for its own host, so no counter sits in between.
+    storageEnv = s3FromEnvFile(opts["s3-env"]);
+  } else if (opts.storage === "s3") {
     store = await startS3();
     counters.b = await countingProxy(PORTS.proxyB, store.host, store.port);
     storageEnv = {
@@ -918,7 +1105,20 @@ async function main() {
       S3_FORCE_PATH_STYLE: "true",
     };
   }
+  const runStart = Date.now();
   const server = startServer(storageEnv);
+  let bucketCleaned = null;
+  const cleanBucket = () => {
+    bucketCleaned ??= new Promise((resolve) => setTimeout(resolve, 3000)).then(() =>
+      realBucketCleanup(storageEnv, join(WORK, "data"), runStart - 5000),
+    );
+    return bucketCleaned;
+  };
+  if (realBucket) {
+    cleanups.push(async () => {
+      console.log(`[bench] left in the bucket and removed: ${JSON.stringify(await cleanBucket())}`);
+    });
+  }
   serverForErrors = server;
   counters.a = await countingProxy(PORTS.proxyA, "127.0.0.1", PORTS.server);
   await waitFor(`http://127.0.0.1:${PORTS.server}/api/health`, "The server");
@@ -929,13 +1129,7 @@ async function main() {
   mkdirSync(downloads, { recursive: true });
   cleanups.push(() => rmSync(downloads, { recursive: true, force: true }));
   const channel = launchChannel();
-  const browser = await engine.launch({
-    downloadsPath: downloads,
-    // Chromium refuses a Service Worker from an origin with a certificate error unless the
-    // whole browser ignores such errors, see e2e/CLAUDE.md.
-    ...(opts.proxy && opts.browser === "chromium" ? { args: ["--ignore-certificate-errors"] } : {}),
-    ...(channel && channel !== "shell" ? { channel } : {}),
-  });
+  const browser = await engine.launch({ ...launchOptions(), downloadsPath: downloads });
   cleanups.push(() => browser.close());
   const sampler = startSampler(counters, server.child.pid);
 
@@ -946,6 +1140,7 @@ async function main() {
     version: browser.version(),
     storage: opts.storage,
     s3: opts.storage === "s3" ? opts.s3 : undefined,
+    executable: opts.executable,
     transport: opts.transport,
     sizeMiB: SIZE / MIB,
     env: opts.env,
@@ -963,6 +1158,8 @@ async function main() {
     result.samples = sampler.samples;
     result.serverLog = server.log.filter((line) => !/^<--|^-->/.test(line)).slice(-50);
     await browser.close().catch(() => {});
+    // Aborts run after the socket closed, so the cleanup gives them a moment first.
+    if (realBucket) result.s3Leftovers = await cleanBucket();
     if (store) {
       // What a run leaves in the bucket. A multipart upload that was never completed or
       // aborted keeps its parts, which a provider bills until a lifecycle rule removes them.

@@ -6,9 +6,18 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn, formatBytes, formatTimeRemaining } from "@/lib/utils";
 import { fileBadge } from "@/lib/file-badge";
 import type { UploadInfo } from "@/lib/api";
-import type { FileMetadata } from "@skysend/crypto";
+import { calculatePlaintextSize, type FileMetadata } from "@skysend/crypto";
 import type { DownloadPhase } from "@/hooks/useDownload";
 import { useNavigate } from "react-router";
+
+/** The size of the file itself, the server only knows the ciphertext with a tag per record. */
+function plaintextSize(encryptedSize: number): number {
+  try {
+    return calculatePlaintextSize(encryptedSize);
+  } catch {
+    return encryptedSize;
+  }
+}
 
 interface DownloadCardProps {
   info: UploadInfo;
@@ -60,7 +69,7 @@ export function DownloadCard({
   const isError = phase === "error";
 
   const stats = [
-    { label: t("download.size"), value: formatBytes(info.size) },
+    { label: t("download.size"), value: formatBytes(plaintextSize(info.size)) },
     { label: t("download.downloads"), value: `${info.downloadCount}/${info.maxDownloads}` },
     { label: t("download.expires"), value: formatTimeRemaining(info.expiresAt) },
   ];

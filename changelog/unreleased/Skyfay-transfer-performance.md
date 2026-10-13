@@ -8,12 +8,14 @@
 - **server**: Uploads to S3 storage no longer fail at the very end when their parts finished uploading out of order, which happened most often with several uploads at once.
 - **server**: A failed or abandoned upload to S3 storage no longer leaves its uploaded parts in the bucket, where the provider kept billing them.
 - **server**: Uploads to S3 storage that need more than 10,000 parts no longer fail, since the part size grows with the size of the upload.
+- **server**: Downloads from S3 storage are no longer blocked by the browser when the provider puts the bucket into the host name, like Cloudflare R2 and Hetzner set up as the docs show.
 - **web**: Uploads in chunks, the fallback when a WebSocket cannot connect, no longer fail in a Chrome incognito window once a file passes 1 to 2 GB.
 - **web**: The technical info of a download no longer claims on a phone, a tablet or a browser other than Firefox that the developer tools are open.
 - **web**: Several files that add up to more than 4 GB arrive as a zip that unzip tools can open, where they reported it as damaged before.
 - **web**: Folders uploaded from Safari keep their subfolders in the zip, where files of the same name in two subfolders overwrote each other.
 - **web**: Files whose names are too long together for the server are refused before the upload starts, instead of failing once every byte is up.
-- **web**: A download in Firefox streams straight to disk again when the page sat open for half a minute before it started, instead of falling back to a slower way after five seconds.
+- **web**: A download in Firefox streams straight to disk even when the page sat open for half a minute before it started, instead of falling back to a slower way after five seconds.
+- **web**: A download page shows the size of the file, where it showed the slightly larger size of its encrypted copy on the server.
 
 ### 🔒 Security
 
@@ -25,7 +27,11 @@
 - **crypto**: Encrypting and decrypting a file no longer slows down when the browser hands over the data in large pieces, which held back uploads from Chrome on Linux and downloads that are decrypted in memory.
 - **web**: Uploads over WebSocket copy less and keep the connection busy, which makes them faster in every browser and about half again as fast in Chrome.
 - **web**: The progress bar and the speed of an upload follow what really left the browser and change smoothly, instead of lagging behind and jumping at the end.
+- **web**: The speed of a download is the average of the last three seconds like for an upload, so it no longer jumps between nothing and twice the real speed when the data arrives in bursts, as it does from a bucket.
+- **web**: An upload shows that it is being processed once the browser sent everything, instead of standing at 99 % while the server still writes to the bucket.
+- **web**: The progress text and the cancel button of uploads and downloads are worded alike in English and German.
 - **server**: An upload to S3 storage smaller than one part is stored with a single request, and the last part of a larger one goes out beside the parts still uploading.
+- **server**: Uploads to S3 storage reuse their connections to the bucket instead of opening a new one for every part. On a server whose DNS resolver answers several lookups at once slowly, that made uploads to Cloudflare R2 five times as fast in a test.
 - **server**: An upload over WebSocket stops as soon as writing to the storage fails, instead of after the browser sent the whole file.
 - **web**: The download service worker only handles downloads and no longer sees every other request of the app, which also makes uploads in chunks faster.
 - **server**: The files of the app are served from memory in one piece, so a page behind a reverse proxy on the same host no longer waits 200 to 400 ms for each of them.
@@ -47,13 +53,16 @@
 
 - **server**: Unit tests cover the order of the parts and the abort of S3 multipart uploads.
 - **crypto**: Tests check the record layout of encrypted files against the format itself for every way the input can be cut into chunks.
-- **infra**: A benchmark sends large files up and down through the app in Chromium, Chrome, Firefox and WebKit and records the speed of every hop, for one transfer or several side by side, optionally over a slower network or behind Nginx.
+- **infra**: A benchmark sends large files up and down through the app in Chromium, Chrome, Brave, Firefox and WebKit and records the speed of every hop and what the page shows, for one transfer or several side by side, optionally over a slower network, behind Nginx or against a real S3 bucket.
 - **infra**: End-to-end tests check that the download service worker controls no page and replaces the registration of an older release.
 - **server**: Unit tests cover the memory limit of S3 uploads and the serving of the files of the app.
 - **infra**: An end-to-end test downloads a file through the browser's private storage, the way Safari now does, in Firefox with Service Workers blocked.
 - **web**: Unit tests read the zip of several files back with another zip reader and check its records past 4 GB.
 - **web**: Unit tests cover the check of the room in browser storage before a download goes there.
+- **web**: Unit tests check that the speed a transfer shows stays steady when its data arrives in bursts.
 - **web**: Unit tests cover how the download service worker gets its updates and which worker takes a download.
 - **server**: Unit tests cover the rate limit of uploads over WebSocket, their shared memory budget and the timeout before their start.
+- **server**: Unit tests check that the content security policy allows the presigned downloads of R2, Hetzner, MinIO and AWS S3 as the AWS SDK builds them.
 - **infra**: End-to-end tests check that a folder keeps its subfolders in the zip and that names too long for the server stop an upload before it starts.
 - **infra**: An end-to-end test starts a download in Firefox after the browser stopped the idle download service worker.
+- **web**: A unit test checks that a download page shows the size of the file and not of its ciphertext.

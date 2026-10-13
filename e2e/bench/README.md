@@ -14,8 +14,10 @@ browser --> [proxy A :3900] --> server :3901 --> [proxy B :3902] --> S3 :3903
 | :--- | :--- | :--- |
 | `--browser` | `chromium` | `chromium`, `firefox` or `webkit` |
 | `--channel` | `chromium` for Chromium | The full Chromium in its new headless mode, which is what people run. `chrome` takes an installed Google Chrome, `shell` the headless shell of the end-to-end tests. |
+| `--executable` | | Another Chromium build with `--browser chromium`, like `/usr/bin/brave-browser` |
 | `--storage` | `fs` | `fs` or `s3` |
-| `--s3` | `local` | `local` starts SeaweedFS in Docker, or an `http://host:port` of a store that takes unsigned requests, like SeaweedFS without identities |
+| `--s3` | `local` | `local` starts SeaweedFS in Docker, or an `http://host:port` of a store that takes unsigned requests, like SeaweedFS without identities. `env` uses the real bucket of the `S3_*` lines in `--s3-env`, with no counter towards it. Its CORS policy has to allow the origin of the run, `http://127.0.0.1:3900` by default, `http://127.0.0.1:3901` with `--direct` and `https://localhost:3906` with `--proxy nginx`. Afterwards the run aborts the multipart uploads it left and deletes the objects of its own uploads, by the IDs in its database, and nothing else |
+| `--s3-env` | `.env.dev` | The env file `--s3 env` reads, relative to the repository or absolute. Its keys are never printed |
 | `--transport` | `ws` | `ws` or `http`, through `FILE_UPLOAD_WS` |
 | `--size` | `1024` | MiB |
 | `--env KEY=VALUE` | | Any server variable, repeatable, like `--env S3_PART_SIZE=10MB` |
@@ -33,6 +35,8 @@ browser --> [proxy A :3900] --> server :3901 --> [proxy B :3902] --> S3 :3903
 | `--port` | `3900` | First of the four ports |
 
 What a result holds: total time and speed per direction, the time from the click to the first byte and from 100 % in the UI to the link (`tailSeconds`), rates in windows of 250 ms, 500 ms and 1 s with their spread (`cv`) for the UI, the wire and the bucket, CPU and peak memory of server and browser, the download tier, whether the download matched, and with S3 the multipart uploads left in the bucket.
+
+`shown` is what the page displayed, read every half second from the text beside its progress bar, for the upload and the download: the speeds it showed (10th percentile, median, 90th percentile and spread), the largest jump between two readings, whether the percent ever went back, how long it stood at its last value before the transfer ended, and the average the finished page showed, next to the speed the transfer really had. `shown.timeline` keeps every reading as seconds, percent and speed, numbers only. While an upload is processed the page shows no bar with a percent, so no reading covers that phase. A screenshot of the page at half the transfer lands in `screenshots/`.
 
 ## summary.mjs
 
