@@ -148,7 +148,7 @@ export async function streamDownloadViaSw(
     };
 
     downloadBc.addEventListener("message", handler);
-    downloadBc.postMessage({
+    const config = {
       type: "config",
       id: downloadId,
       url,
@@ -160,7 +160,12 @@ export async function streamDownloadViaSw(
       mimeType,
       size: encryptedSize,
       plaintextSize,
-    });
+    };
+    // A message to the worker starts it if the browser stopped it while the page sat open,
+    // a BroadcastChannel message does not. The second copy reaches an active worker of an
+    // older release, which only listens there. The worker keeps whichever comes first.
+    sw.postMessage(config);
+    downloadBc.postMessage(config);
   });
 
   // When the caller aborts, tell the SW to cancel the in-progress download.

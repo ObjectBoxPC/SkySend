@@ -13,6 +13,7 @@
 - **web**: Several files that add up to more than 4 GB arrive as a zip that unzip tools can open, where they reported it as damaged before.
 - **web**: Folders uploaded from Safari keep their subfolders in the zip, where files of the same name in two subfolders overwrote each other.
 - **web**: Files whose names are too long together for the server are refused before the upload starts, instead of failing once every byte is up.
+- **web**: A download in Firefox streams straight to disk again when the page sat open for half a minute before it started, instead of falling back to a slower way after five seconds.
 
 ### 🎨 Improvements
 
@@ -47,3 +48,4 @@
 - **web**: Unit tests read the zip of several files back with another zip reader and check its records past 4 GB.
 - **web**: Unit tests cover the check of the room in browser storage before a download goes there.
 - **infra**: End-to-end tests check that a folder keeps its subfolders in the zip and that names too long for the server stop an upload before it starts.
+- **infra**: An end-to-end test starts a download in Firefox after the browser stopped the idle download service worker.

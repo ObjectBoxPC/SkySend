@@ -53,6 +53,7 @@ The UI is served as a page instead of a window, so it works on a machine without
 - A label can collide with a block of the same name: a template field called "Password" shares its name with the Password block's region. `sendToRequest` fills fields by their textbox for that reason, and test data uses distinct labels.
 - `rowMenu(row, item)` opens "More actions" of a row in My Links, an inbox or the template list, `confirm(page, action)` presses the button of the dialog that asks first.
 - Under Playwright, Firefox takes a folder through the `webkitdirectory` input but never answers the click after it, so the folder test of `archive.spec.ts` skips Firefox. WebKit is the engine it is for, since WebKit drops the path of a File it posts to a worker.
+- Firefox shortens the idle timeout of Service Workers through `firefoxUserPrefs` (`dom.serviceWorkers.idle_timeout`), so `service-worker.spec.ts` launches a Firefox of its own with one second to check a download after the worker was stopped. Chromium has no such switch.
 - Cancelling a download is not covered: nothing slows a download down reliably, and in Firefox the Service Worker fetches past Playwright.
 
 ## Crafted notes and large files

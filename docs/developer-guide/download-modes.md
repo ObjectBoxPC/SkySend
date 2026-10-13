@@ -29,7 +29,7 @@ Service Worker (inside respondWith):
 ### How it works
 
 1. Main thread checks that the download Service Worker is active (`ensureSwController()`). It controls no page, only the URLs under `/__skysend_download__/`
-2. Main thread sends download config to SW via `postMessage`: URL, auth token, raw secret, salt, filename, MIME type, encrypted size
+2. Main thread sends the download config to the SW with `postMessage` on the worker: URL, auth token, raw secret, salt, filename, MIME type, encrypted size. That message starts the worker when the browser stopped it, which every browser does after about 30 seconds without work. The same config goes over the `skysend-download` BroadcastChannel as well, for an active worker of an older release. The SW keeps the first copy, answers `config-ok` and stays up until the download arrives, a minute at most
 3. Main thread navigates to `/__skysend_download__/{id}`
 4. SW intercepts the navigation, which lies in its scope, and calls `handleDownload()` inside `respondWith()`
 5. SW derives the AES-256-GCM file key via HKDF (using `crypto.subtle`)
@@ -41,7 +41,7 @@ Service Worker (inside respondWith):
    - Enqueues the plaintext chunk
 8. SW returns `new Response(decryptStream, { headers })` with `Content-Disposition: attachment`
 9. Browser download manager writes to disk natively
-10. SW reports progress and completion back to main thread via `clients.matchAll()` + `postMessage()`
+10. SW reports progress and completion back to main thread over the `skysend-download` BroadcastChannel
 
 ### Why this is necessary for Firefox
 

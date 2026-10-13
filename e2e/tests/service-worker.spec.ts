@@ -56,6 +56,37 @@ test("a download without a Service Worker goes to disk through OPFS", async ({
   await context.close();
 });
 
+test("a download starts in the Service Worker after the browser stopped it", async ({
+  page,
+  playwright,
+  browserName,
+  guard,
+}) => {
+  // A browser stops a Service Worker after half a minute without work, and a BroadcastChannel
+  // message does not start it again, so a recipient who waited on the page fell back to a
+  // slower tier. Only Firefox lets a test shorten that half minute, to one second here.
+  test.skip(browserName !== "firefox", "only Firefox can shorten the idle timeout");
+  const file = randomFile(300_000);
+  guard.content(file.name, file.buffer);
+  const link = await shareFiles(page, [file]);
+  guard.secretOf(link);
+
+  const firefox = await playwright.firefox.launch({
+    firefoxUserPrefs: {
+      "dom.serviceWorkers.idle_timeout": 1000,
+      "dom.serviceWorkers.idle_extended_timeout": 1000,
+    },
+  });
+  const recipient = await (await firefox.newContext({ locale: "en-US" })).newPage();
+  const tiers = watchTiers(recipient);
+  await recipient.goto(link);
+  await recipient.waitForTimeout(4000);
+  const got = await downloadFile(recipient);
+  expect(Buffer.compare(got.data, file.buffer)).toBe(0);
+  expect(tiers).toEqual(["1"]);
+  await firefox.close();
+});
+
 test("the download Service Worker controls no page", async ({ page }) => {
   await page.goto("/");
   expect(await registeredScopes(page)).toEqual([SCOPE]);
