@@ -14,7 +14,8 @@ import "flag-icons/css/flag-icons.min.css";
 applyRewrittenShareLinkFix();
 
 // Register the download Service Worker early, so tier 1 finds it active. It covers only the
-// URLs of tier 1, see DOWNLOAD_SW_SCOPE.
+// URLs of tier 1, see DOWNLOAD_SW_SCOPE, and comes under the version of this release, see
+// DOWNLOAD_SW_URL.
 if ("serviceWorker" in navigator) {
   registerDownloadSw().catch(() => {});
 }

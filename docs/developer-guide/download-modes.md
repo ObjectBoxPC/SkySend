@@ -216,15 +216,19 @@ if (!downloaded) {
 
 ## Service Worker Registration
 
-The Service Worker (`download-sw.js`) is registered in `main.tsx` through `registerDownloadSw()` in `sw-download.ts`, with the scope `/__skysend_download__/`:
+The Service Worker (`download-sw.js`) is registered in `main.tsx` through `registerDownloadSw()` in `sw-download.ts`, under the version of the release and with the scope `/__skysend_download__/`:
 
 ```typescript
-navigator.serviceWorker.register("/download-sw.js", { scope: DOWNLOAD_SW_SCOPE });
+navigator.serviceWorker.register(`/download-sw.js?v=${__APP_VERSION__}`, { scope: DOWNLOAD_SW_SCOPE });
 ```
 
 The scope is the URLs tier 1 navigates to and nothing else. A navigation reaches the worker of the scope it lies in even from a page no worker controls, so tier 1 works the same. Releases before 2026-10 registered it for the whole origin, which put every request of every page through its fetch handler, the requests of an upload among them. Chromium keeps the body of such a request alive in blob memory, and a chunked upload of 2 GiB in an incognito window failed with `ERR_BLOB_OUT_OF_MEMORY`. `registerDownloadSw()` removes such an old registration.
 
-The SW uses `skipWaiting()` to activate immediately, so `ensureSwController()` waits for the active worker of the registration, not for `navigator.serviceWorker.controller`, which stays empty. The server must serve `/download-sw.js` with the correct MIME type (`application/javascript`) - a dedicated route exists in the Hono server to prevent the SPA catch-all from serving it as `index.html`.
+The SW uses `skipWaiting()` to activate immediately, so `ensureSwController()` waits for the active worker of the registration, not for `navigator.serviceWorker.controller`, which stays empty.
+
+A browser looks for a new version of a worker when it navigates into its scope, and `register()` with an unchanged script URL does not look at all. With this scope that navigation is the download itself, which never comes when an old worker fails tier 1 first, so a worker of the release before stayed active until a download reached it, and with tier 1 failing on that worker none ever did. The check a browser makes after 24 hours runs on such a navigation too. The version in the URL solves it: `register()` with a URL other than the registered one fetches the script again, so the first page load of a new release brings its worker along, and between releases nothing is fetched. `pnpm version:bump` gives every release, `-dev` and `-beta` included, a version of its own. A build between two releases keeps the URL, so whoever tests one removes the old worker in the browser by hand. `ensureSwController()` waits for a newer worker that is still installing instead of handing the download to the one it is about to replace. The config goes out over the BroadcastChannel every 250 ms until a worker answers, so a worker of an older release that the first message only woke up still gets it.
+
+The server must serve `/download-sw.js` with the correct MIME type (`application/javascript`) - a dedicated route exists in the Hono server to prevent the SPA catch-all from serving it as `index.html`.
 
 ## Browser Compatibility Matrix
 

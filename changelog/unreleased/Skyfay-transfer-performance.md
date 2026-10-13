@@ -47,5 +47,6 @@
 - **infra**: An end-to-end test downloads a file through the browser's private storage, the way Safari now does, in Firefox with Service Workers blocked.
 - **web**: Unit tests read the zip of several files back with another zip reader and check its records past 4 GB.
 - **web**: Unit tests cover the check of the room in browser storage before a download goes there.
+- **web**: Unit tests cover how the download service worker gets its updates and which worker takes a download.
 - **infra**: End-to-end tests check that a folder keeps its subfolders in the zip and that names too long for the server stop an upload before it starts.
 - **infra**: An end-to-end test starts a download in Firefox after the browser stopped the idle download service worker.

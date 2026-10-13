@@ -16,11 +16,21 @@ const downloadBc = new BroadcastChannel("skysend-download");
 export const DOWNLOAD_SW_SCOPE = "/__skysend_download__/";
 
 /**
+ * The script of the download Service Worker, under the version of this release. A browser looks
+ * for a new worker on its own only when it navigates into the scope of the worker, which here is
+ * the download itself, and that never happens when an old worker fails tier 1 first. A new
+ * release has a new URL, and `register()` with a URL other than the registered one fetches the
+ * script again, so every release brings its worker along. Between releases nothing is fetched. A
+ * build between two releases keeps the URL, so whoever tests one removes the old worker by hand.
+ */
+export const DOWNLOAD_SW_URL = `/download-sw.js?v=${encodeURIComponent(__APP_VERSION__)}`;
+
+/**
  * Registers the download Service Worker. Releases before 2026-10 registered it for the whole
  * origin, so such a registration is removed. The page it controls right now stays controlled
  * until it navigates.
  */
-export function registerDownloadSw(): Promise<ServiceWorkerRegistration> {
+export async function registerDownloadSw(): Promise<ServiceWorkerRegistration> {
   navigator.serviceWorker
     .getRegistrations()
     .then((registrations) => {
@@ -33,19 +43,27 @@ export function registerDownloadSw(): Promise<ServiceWorkerRegistration> {
       }
     })
     .catch(() => {});
-  return navigator.serviceWorker.register("/download-sw.js", { scope: DOWNLOAD_SW_SCOPE });
+  return navigator.serviceWorker.register(DOWNLOAD_SW_URL, { scope: DOWNLOAD_SW_SCOPE });
 }
 
-/** The active worker of a registration, waiting for one that is still installing. */
-function activeWorker(registration: ServiceWorkerRegistration): Promise<ServiceWorker | null> {
-  if (registration.active) return Promise.resolve(registration.active);
-  const pending = registration.installing ?? registration.waiting;
-  if (!pending) return Promise.resolve(null);
+/**
+ * The worker that will handle the download. A newer one that is still installing, like the worker
+ * of a release a browser sees for the first time, replaces the active one as soon as it activates,
+ * and the configs the old one holds go with it, so that one is waited for. If it fails, the
+ * active one stays.
+ */
+export function activeWorker(
+  registration: ServiceWorkerRegistration,
+): Promise<ServiceWorker | null> {
+  const next = registration.installing ?? registration.waiting;
+  if (!next) return Promise.resolve(registration.active);
   return new Promise((resolve) => {
-    pending.addEventListener("statechange", () => {
-      if (pending.state === "activated") resolve(pending);
-      if (pending.state === "redundant") resolve(null);
-    });
+    const settle = () => {
+      if (next.state === "activated") resolve(next);
+      if (next.state === "redundant") resolve(registration.active);
+    };
+    next.addEventListener("statechange", settle);
+    settle();
   });
 }
 
@@ -125,14 +143,17 @@ export async function streamDownloadViaSw(
   const downloadId = crypto.randomUUID();
 
   // Send config to SW and wait for ACK
+  let resend: ReturnType<typeof setInterval> | undefined;
   await new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(() => {
+      clearInterval(resend);
       downloadBc.removeEventListener("message", handler);
       reject(new Error("SW config timeout"));
     }, 5000);
 
     const abortHandler = () => {
       clearTimeout(timeout);
+      clearInterval(resend);
       downloadBc.removeEventListener("message", handler);
       reject(new DOMException("Download cancelled", "AbortError"));
     };
@@ -141,6 +162,7 @@ export async function streamDownloadViaSw(
     const handler = (e: MessageEvent) => {
       if (e.data?.type === "config-ok" && e.data?.id === downloadId) {
         clearTimeout(timeout);
+        clearInterval(resend);
         signal?.removeEventListener("abort", abortHandler);
         downloadBc.removeEventListener("message", handler);
         resolve();
@@ -162,10 +184,13 @@ export async function streamDownloadViaSw(
       plaintextSize,
     };
     // A message to the worker starts it if the browser stopped it while the page sat open,
-    // a BroadcastChannel message does not. The second copy reaches an active worker of an
-    // older release, which only listens there. The worker keeps whichever comes first.
+    // a BroadcastChannel message does not. The copies over the BroadcastChannel reach a worker
+    // of an older release, which only listens there: the first message only woke it, and a
+    // copy that arrives before its channel exists is lost, so they go out until one answers.
+    // The worker keeps whichever comes first.
     sw.postMessage(config);
     downloadBc.postMessage(config);
+    resend = setInterval(() => downloadBc.postMessage(config), 250);
   });
 
   // When the caller aborts, tell the SW to cancel the in-progress download.
