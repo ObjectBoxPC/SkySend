@@ -12,12 +12,19 @@ vi.mock("../../src/lib/sw-download.js", () => ({
 
 vi.mock("../../src/lib/utils.js", () => ({
   isSafari: vi.fn(() => false),
+  isFirefox: vi.fn(() => false),
+  isBrave: vi.fn(() => false),
   isDevToolsOpen: vi.fn(() => false),
   getBrowserInfo: vi.fn(() => "test"),
+  formatBytes: vi.fn((n: number) => `${n} B`),
 }));
 
 import * as opfs from "../../src/lib/sw-download.js";
-import { saveDecryptedDownload, type SaveDownloadOptions } from "../../src/lib/download-tiers.js";
+import {
+  saveDecryptedDownload,
+  type DownloadDebugInfo,
+  type SaveDownloadOptions,
+} from "../../src/lib/download-tiers.js";
 
 function options(overrides: Partial<SaveDownloadOptions> = {}): SaveDownloadOptions {
   return {
@@ -83,6 +90,47 @@ describe("saveDecryptedDownload", () => {
     expect(onProgress).toHaveBeenCalledWith(0, 0);
     expect(onProgress).toHaveBeenLastCalledWith(100, 3);
     expect(URL.createObjectURL).toHaveBeenCalled();
+  });
+
+  it("says in the timeline why the faster tiers were passed over", async () => {
+    // What Chromium answers on a page whose certificate error was clicked away.
+    vi.mocked(opfs.ensureSwController).mockImplementationOnce(async (onUnavailable) => {
+      onUnavailable?.("An SSL certificate error occurred when fetching the script.");
+      return null;
+    });
+    URL.createObjectURL = vi.fn(() => "blob:x");
+    URL.revokeObjectURL = vi.fn();
+    const fetchCiphertext = vi.fn().mockResolvedValue({
+      stream: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1, 2, 3]));
+          controller.close();
+        },
+      }),
+      size: 3,
+      storageBackend: "filesystem",
+    });
+    let info: DownloadDebugInfo | null = null;
+    await saveDecryptedDownload(
+      options({
+        source: { path: "/p", token: "t", tokenHeader: "X-Inbox-Token", fetchCiphertext },
+        onDebug: (update) => {
+          info = update(info);
+        },
+      }),
+    );
+
+    // jsdom has no file picker and no Worker, so OPFS is out too.
+    const events = (info as DownloadDebugInfo | null)?.events ?? [];
+    expect(events.map((e) => [e.message, e.detail])).toEqual([
+      [
+        "Service Worker not available",
+        "An SSL certificate error occurred when fetching the script.",
+      ],
+      ["Save File Picker not available", "This browser has none"],
+      ["OPFS not used", "OPFS does not work in this browser"],
+      ["Blob fallback started", undefined],
+    ]);
   });
 
   it("stops at a cancel instead of falling back", async () => {

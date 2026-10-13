@@ -95,9 +95,17 @@ export async function saveDecryptedDownload(options: SaveDownloadOptions): Promi
     onProgress,
     onDebug,
   } = options;
-  const event = (message: string) => ({ time: new Date().toISOString(), message });
+  const event = (message: string, detail?: string) => ({
+    time: new Date().toISOString(),
+    message,
+    ...(detail ? { detail } : {}),
+  });
   const addEvent = (message: string) =>
     onDebug((d) => (d ? { ...d, events: [...d.events, event(message)] } : null));
+  // Why a tier was passed over, shown before the one that ran, so a report of a download that
+  // landed in the Blob tier says what stopped the faster ones.
+  const passed: ReturnType<typeof event>[] = [];
+  const pass = (message: string, detail?: string) => passed.push(event(message, detail));
 
   // Safari terminates Service Workers aggressively and buffers ReadableStream
   // responses in RAM instead of streaming to disk. For large files the caller
@@ -107,7 +115,10 @@ export async function saveDecryptedDownload(options: SaveDownloadOptions): Promi
 
   // Tier 1: Service Worker streaming decryption (non-Safari browsers)
   try {
-    const sw = !safari ? await ensureSwController() : null;
+    if (safari) pass("Service Worker skipped", "Safari never streams it into a download");
+    const sw = !safari
+      ? await ensureSwController((reason) => pass("Service Worker not available", reason))
+      : null;
     if (sw) {
       console.info("[SkySend] Download tier: 1 (SW stream)");
       onDebug(() => ({
@@ -145,6 +156,7 @@ export async function saveDecryptedDownload(options: SaveDownloadOptions): Promi
     if (swErr instanceof DOMException && swErr.name === "AbortError") throw swErr;
     if (isTruncated(swErr)) throw swErr;
     console.warn("[SkySend] SW stream failed, trying fallback:", swErr);
+    pass("SW stream failed", swErr instanceof Error ? swErr.message.slice(0, 200) : undefined);
   }
 
   /** Fetches the ciphertext and counts what arrives, with a note in the debug log on a stall. */
@@ -198,7 +210,7 @@ export async function saveDecryptedDownload(options: SaveDownloadOptions): Promi
         browser: getBrowserInfo(),
         devtools: firefoxDevToolsOpen(),
         fileSize: size,
-        events: [...(d?.events ?? []), event("Save File Picker started")],
+        events: [...(d?.events ?? []), ...passed.splice(0), event("Save File Picker started")],
       }));
       const fileHandle = await window.showSaveFilePicker({
         suggestedName: filename,
@@ -216,12 +228,20 @@ export async function saveDecryptedDownload(options: SaveDownloadOptions): Promi
       // A failed pipeTo() aborts the writable, which discards the partial file.
       if (isTruncated(pickerErr)) throw pickerErr;
       console.warn("[SkySend] showSaveFilePicker failed:", pickerErr);
+      pass(
+        "Save File Picker failed",
+        pickerErr instanceof Error ? pickerErr.message.slice(0, 200) : undefined,
+      );
     }
+  } else if (!downloaded) {
+    pass("Save File Picker not available", "This browser has none");
   }
 
   // Tier 3: OPFS. Checks everything before it fetches, so a browser without room falls through.
   if (!downloaded) {
-    const disk = await createOpfsFile(plaintextSize ?? size);
+    const disk = await createOpfsFile(plaintextSize ?? size, (reason) =>
+      pass("OPFS not used", reason),
+    );
     if (disk) {
       console.info("[SkySend] Download tier: 3 (OPFS)");
       onProgress(0, 0);
@@ -231,7 +251,7 @@ export async function saveDecryptedDownload(options: SaveDownloadOptions): Promi
         browser: getBrowserInfo(),
         devtools: firefoxDevToolsOpen(),
         fileSize: size,
-        events: [...(d?.events ?? []), event("OPFS file started")],
+        events: [...(d?.events ?? []), ...passed.splice(0), event("OPFS file started")],
       }));
       let stopStallTimer = () => {};
       try {
@@ -268,7 +288,11 @@ export async function saveDecryptedDownload(options: SaveDownloadOptions): Promi
       browser: getBrowserInfo(),
       devtools: firefoxDevToolsOpen(),
       fileSize: size,
-      events: [...(d?.events ?? []), event(`Blob fallback started${safari ? " (Safari)" : ""}`)],
+      events: [
+        ...(d?.events ?? []),
+        ...passed.splice(0),
+        event(`Blob fallback started${safari ? " (Safari)" : ""}`),
+      ],
     }));
     const { decrypted, stopStallTimer } = await fetchCounted();
     const reader = decrypted.getReader();

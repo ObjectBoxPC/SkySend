@@ -295,6 +295,15 @@ describe("getBrowserInfo", () => {
     expect(getBrowserInfo()).toBe("Firefox 127");
   });
 
+  it("names Brave, whose user agent says Chrome", () => {
+    vi.stubGlobal("navigator", {
+      userAgent:
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+      brave: {},
+    });
+    expect(getBrowserInfo()).toBe("Brave 155");
+  });
+
   it("identifies Chrome", () => {
     vi.stubGlobal("navigator", {
       userAgent:

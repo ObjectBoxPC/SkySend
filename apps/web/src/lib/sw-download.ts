@@ -54,9 +54,15 @@ function activeWorker(registration: ServiceWorkerRegistration): Promise<ServiceW
  * DOWNLOAD_SW_SCOPE, so this waits for the worker itself, not for a controller.
  * Has a hard timeout, since a registration that fails to install never activates.
  */
-export async function ensureSwController(): Promise<ServiceWorker | null> {
-  if (!("serviceWorker" in navigator)) return null;
+export async function ensureSwController(
+  onUnavailable?: (reason: string) => void,
+): Promise<ServiceWorker | null> {
+  if (!("serviceWorker" in navigator)) {
+    onUnavailable?.("This browser offers no Service Workers here");
+    return null;
+  }
 
+  let reason = "It did not start within 5 s";
   const result = await Promise.race([
     (async () => {
       try {
@@ -64,6 +70,10 @@ export async function ensureSwController(): Promise<ServiceWorker | null> {
         return await activeWorker(await registerDownloadSw());
       } catch (err) {
         console.warn("[SkySend] SW registration failed:", err);
+        // Chromium puts the scope and the script URL in front of the reason, like "An SSL
+        // certificate error occurred when fetching the script." for an untrusted certificate.
+        const text = err instanceof Error ? err.message : String(err);
+        reason = text.split("): ").pop()!.slice(0, 200);
         return null;
       }
     })(),
@@ -74,6 +84,7 @@ export async function ensureSwController(): Promise<ServiceWorker | null> {
     console.info("[SkySend] Service Worker ready");
   } else {
     console.warn("[SkySend] Service Worker not available (timeout or failed)");
+    onUnavailable?.(reason);
   }
   return result;
 }

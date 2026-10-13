@@ -24,6 +24,7 @@
 - **web**: The download service worker only handles downloads and no longer sees every other request of the app, which also makes uploads in chunks faster.
 - **server**: The files of the app are served from memory in one piece, so a page behind a reverse proxy on the same host no longer waits 200 to 400 ms for each of them.
 - **web**: Several files go up while they are packed, with no wait before the upload and without the zip in memory, which made 3 GB of files that do not compress about four times as fast in a test.
+- **web**: The technical info of a download names Brave as Brave and says why faster ways of saving were passed over, like a Service Worker stopped by a certificate error.
 
 ### 🔄 Changed
 
@@ -44,4 +45,5 @@
 - **server**: Unit tests cover the memory limit of S3 uploads and the serving of the files of the app.
 - **infra**: An end-to-end test downloads a file through the browser's private storage, the way Safari now does, in Firefox with Service Workers blocked.
 - **web**: Unit tests read the zip of several files back with another zip reader and check its records past 4 GB.
+- **web**: Unit tests cover the check of the room in browser storage before a download goes there.
 - **infra**: End-to-end tests check that a folder keeps its subfolders in the zip and that names too long for the server stop an upload before it starts.

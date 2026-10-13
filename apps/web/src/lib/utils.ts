@@ -54,6 +54,11 @@ export function isFirefox(): boolean {
   return /firefox/i.test(navigator.userAgent);
 }
 
+/** Detect Brave, whose user agent names only Chrome. */
+export function isBrave(): boolean {
+  return "brave" in navigator;
+}
+
 /**
  * Detect whether browser DevTools are currently open by measuring the
  * difference between outer and inner window dimensions. A docked DevTools
@@ -88,7 +93,7 @@ export function getBrowserInfo(): string {
   const firefoxMatch = ua.match(/Firefox\/(\d+)/);
   if (firefoxMatch) return `Firefox ${firefoxMatch[1]}`;
   const chromeMatch = ua.match(/Chrome\/(\d+)/);
-  if (chromeMatch) return `Chrome ${chromeMatch[1]}`;
+  if (chromeMatch) return `${isBrave() ? "Brave" : "Chrome"} ${chromeMatch[1]}`;
   const safariMatch = ua.match(/Version\/(\d+).*Safari/);
   if (safariMatch) return `Safari ${safariMatch[1]}`;
   return "Unknown Browser";

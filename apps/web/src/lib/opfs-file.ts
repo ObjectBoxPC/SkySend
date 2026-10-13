@@ -10,6 +10,8 @@
  * and a download in any tab removes the ones older than an hour that a closed tab left behind.
  */
 
+import { formatBytes, isBrave } from "@/lib/utils";
+
 const PREFIX = "skysend-download-";
 /** Plaintext goes to the worker in batches of this size, one on its way while the next fills. */
 const BATCH = 8 * 1024 * 1024;
@@ -119,15 +121,25 @@ function opfsWorks(): Promise<boolean> {
   return works;
 }
 
+/** Why a download of `size` bytes cannot be saved through OPFS here, or null when it can. */
+async function opfsProblem(size: number): Promise<string | null> {
+  try {
+    if (!(await opfsWorks())) return "OPFS does not work in this browser";
+    const { quota = 0, usage = 0 } = await navigator.storage.estimate();
+    // Brave reports a quota of exactly 2 GiB whatever it allows, against fingerprinting, and
+    // took 3.2 GB into OPFS in a normal profile in a test, so that number says nothing.
+    if (isBrave() && quota === 2 ** 31) return null;
+    const free = Math.max(0, quota - usage);
+    if (free >= size + MARGIN) return null;
+    return `${formatBytes(free)} free, ${formatBytes(size + MARGIN)} needed`;
+  } catch {
+    return "OPFS does not work in this browser";
+  }
+}
+
 /** Whether a download of `size` bytes can be saved through OPFS in this browser. */
 export async function opfsFits(size: number): Promise<boolean> {
-  try {
-    if (!(await opfsWorks())) return false;
-    const { quota = 0, usage = 0 } = await navigator.storage.estimate();
-    return quota - usage >= size + MARGIN;
-  } catch {
-    return false;
-  }
+  return (await opfsProblem(size)) === null;
 }
 
 export interface OpfsFile {
@@ -142,12 +154,20 @@ export interface OpfsFile {
 }
 
 /**
- * Opens a file for a download of `size` bytes, or returns null when OPFS cannot hold it here.
- * Everything that could fail before the download starts is checked first, so a browser falls
- * back to another tier without having used up a download of a limited share.
+ * Opens a file for a download of `size` bytes, or returns null when OPFS cannot hold it here
+ * and tells `onUnavailable` why. Everything that could fail before the download starts is
+ * checked first, so a browser falls back to another tier without having used up a download of
+ * a limited share.
  */
-export async function createOpfsFile(size: number): Promise<OpfsFile | null> {
-  if (!(await opfsFits(size))) return null;
+export async function createOpfsFile(
+  size: number,
+  onUnavailable?: (reason: string) => void,
+): Promise<OpfsFile | null> {
+  const problem = await opfsProblem(size);
+  if (problem) {
+    onUnavailable?.(problem);
+    return null;
+  }
   void sweep();
   const name = `${PREFIX}${Date.now()}-${crypto.randomUUID()}`;
   const worker = openWorker();
@@ -156,6 +176,7 @@ export async function createOpfsFile(size: number): Promise<OpfsFile | null> {
   } catch {
     worker.terminate();
     remove(name);
+    onUnavailable?.("OPFS did not open the file");
     return null;
   }
 

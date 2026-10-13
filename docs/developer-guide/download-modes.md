@@ -129,6 +129,12 @@ The OPFS file holds plaintext. It is removed once the download manager has had t
 
 The end-to-end check catches browsers whose OPFS fails. A private window may refuse OPFS or offer too little quota, and WebKit on Linux, which the end-to-end tests run, reads back an empty file. These go on to Tier 4. On Safari the warning before a large download is only shown when Tier 3 cannot take the file.
 
+Brave reports a quota of exactly 2 GiB whatever it allows, against fingerprinting. A normal Brave profile took 3.2 GB into OPFS in a test, so Brave's number is not held against a file. A private window of Brave or Chrome stops writing at about 2 GB, whatever its quota says, so a large file can still fail there in Tier 3. Both reach Tier 3 only when the Service Worker cannot start, like on a page whose certificate error was clicked away: Chromium registers no Service Worker for such a page.
+
+### Why a tier was passed over
+
+The technical info of a download lists why every faster tier was passed over before the one that ran: the reason the Service Worker did not start, like "An SSL certificate error occurred when fetching the script.", a browser without a file picker, or the room OPFS has against what the file needs. A report of a download that landed in Tier 4 says that way what stopped the others.
+
 The download manager of Safari shows no progress while it copies the finished file. The page shows the real progress of the download before that.
 
 ### Key files
