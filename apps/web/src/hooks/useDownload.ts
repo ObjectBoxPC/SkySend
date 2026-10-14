@@ -331,7 +331,7 @@ export function useDownload() {
         let mimeType = "application/octet-stream";
         if (metadata?.type === "single") {
           // The name is the sender's word, so it is cleaned like in an inbox: no control
-          // characters that turn "invoice‮fdp.exe" into "invoiceexe.pdf", no path.
+          // characters that turn "invoice\u202Efdp.exe" into "invoiceexe.pdf", no path.
           filename = sanitizeFilename(metadata.name);
           mimeType = metadata.mimeType;
         } else if (metadata?.type === "archive") {

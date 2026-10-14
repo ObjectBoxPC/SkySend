@@ -74,14 +74,14 @@ describe("readTemplateFields", () => {
 
   it("cleans the name, orders the asks and drops the ones it does not know", () => {
     const read = readTemplateFields({
-      name: " Tax‮  2026\u0000 ",
+      name: " Tax\u202E  2026\u0000 ",
       asks: ["note", "video", "files"],
     });
     expect(read).toEqual({ name: "Tax 2026", asks: ["files", "note"] });
   });
 
   it("refuses a template without a name or without anything it asks for", () => {
-    expect(readTemplateFields({ name: "​‮", asks: ["files"] })).toBeNull();
+    expect(readTemplateFields({ name: "\u200B\u202E", asks: ["files"] })).toBeNull();
     expect(readTemplateFields({ name: "Empty", asks: ["video"] })).toBeNull();
     expect(readTemplateFields({ name: "Odd", asks: "files" })).toBeNull();
     expect(readTemplateFields(null)).toBeNull();
@@ -94,7 +94,7 @@ describe("readTemplateFields", () => {
       note: {
         v: 1,
         blocks: [
-          { type: "password", entries: [{ label: "PIN‮", value: "4711" }] },
+          { type: "password", entries: [{ label: "PIN\u202E", value: "4711" }] },
           { type: "text", format: "plain", text: "Send it to me", label: "Notes" },
         ],
       },

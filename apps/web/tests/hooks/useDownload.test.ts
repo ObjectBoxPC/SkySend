@@ -181,7 +181,7 @@ describe("useDownload", () => {
     // would render as a page of the instance.
     vi.mocked(cryptoMod.decryptMetadata).mockResolvedValueOnce({
       type: "single",
-      name: "invoice‮fdp.exe",
+      name: "invoice\u202Efdp.exe",
       size: 3,
       mimeType: "text/html",
     });

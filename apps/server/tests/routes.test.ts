@@ -687,6 +687,32 @@ describe("routes", () => {
       expect(body.ok).toBe(true);
     });
 
+    it("answers a share whose downloads are used up like the info does, without its metadata", async () => {
+      const authToken = fakeBase64urlToken();
+      insertTestUpload(dbCtx.db, {
+        authToken,
+        hasPassword: true,
+        passwordSalt: Buffer.from(crypto.getRandomValues(new Uint8Array(16))),
+        passwordAlgo: "argon2id",
+        encryptedMeta: Buffer.from("encrypted-metadata"),
+        nonce: Buffer.from("test-nonce"),
+        downloadCount: 1,
+        maxDownloads: 1,
+      });
+
+      const app = new Hono();
+      app.route("/api/password", createPasswordRoute(mockLockout));
+
+      const res = await app.request(`/api/password/${TEST_UUID}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ authToken }),
+      });
+
+      expect(res.status).toBe(410);
+      expect(await res.text()).not.toContain(Buffer.from("encrypted-metadata").toString("base64"));
+    });
+
     it("should reject wrong auth token", async () => {
       insertTestUpload(dbCtx.db, {
         hasPassword: true,

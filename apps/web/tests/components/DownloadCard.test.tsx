@@ -81,7 +81,7 @@ describe("DownloadCard", () => {
         metadata={{
           type: "archive",
           files: [
-            { name: "invoice‮fdp.exe", size: 1 },
+            { name: "invoice\u202Efdp.exe", size: 1 },
             { name: "../../etc/passwd", size: 2 },
           ],
           totalSize: 3,
@@ -95,6 +95,6 @@ describe("DownloadCard", () => {
     );
     expect(screen.getByText("invoicefdp.exe")).toBeTruthy();
     expect(screen.getByText("_.._etc_passwd")).toBeTruthy();
-    expect(document.body.textContent).not.toContain("‮");
+    expect(document.body.textContent).not.toContain("\u202E");
   });
 });

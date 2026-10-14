@@ -336,6 +336,10 @@ if (config.OIDC_ENABLED && config.OIDC_PROTECT_NOTES && oidcAdapter) {
 
 api.route("/note", noteRoute);
 
+// An unknown path under /api gets a JSON 404 instead of the page of the SPA fallback below with
+// 200, which a client would take for an answer. It has to stay the last route of the group.
+api.all("*", (c) => c.json({ error: "Not found" }, 404));
+
 app.route("/api", api);
 
 // ── Auth Routes (OIDC) ─────────────────────────────────

@@ -52,7 +52,7 @@ src/auth/             OIDC adapters, discovery, PKCE, JWT sessions
 | `GET /api/upload/ws` | upload session | WebSocket upload, primary path when `FILE_UPLOAD_WS=true` |
 | `POST /api/meta/:id` | owner token | Store encrypted metadata, once: the update only runs while none is stored, since the owner token comes from the link |
 | `GET /api/download/:id` | auth token | Stream ciphertext or hand out a presigned S3 URL |
-| `POST /api/password/:id` | auth token | Password check, rate limited by lockout, returns the metadata of a password-protected upload |
+| `POST /api/password/:id` | auth token | Password check, rate limited by lockout, returns the metadata of a password-protected upload. `410` for an expired or used-up share, like the info |
 | `DELETE /api/upload/:id` | owner token | Delete blob and row |
 | `GET /api/quota` | none | Remaining upload quota for the caller |
 | `POST /api/note`, `POST /api/note/:id` | auth token | Create and view encrypted notes |
@@ -159,7 +159,7 @@ Order matters and is easy to break:
 1. `logger`, `secureHeaders`, CORS (health first with `*`, then the allowlist from `BASE_URL` + `CORS_ORIGINS`)
 2. `app.onError` - returns a generic message with `Cache-Control: no-store`
 3. `/api` group: `no-store` on every response, then the rate limiter with its chunk and WS exemptions
-4. Service guards, then the routes
+4. Service guards, then the routes, and last of the `/api` group the JSON 404 for an unknown path, which otherwise fell into the SPA fallback with 200. A route added after it is never reached
 5. `/branding/*`, `/assets/*` (immutable caching, served from memory by `createAssetHandler`), the SPA fallback, then the catch-all static handler
 
 The SPA fallback must stay ahead of the catch-all `serveStatic`, otherwise `GET /` bypasses the `__CUSTOM_TITLE__` injection. `/assets/*` goes out as one buffer per response on purpose: streamed, the headers left on their own and TCP held the body back about 200 ms per file on a fresh loopback connection, which is how a reverse proxy on the same host connects. Do not put it back on `serveStatic`. Error responses and `index.html` are `no-store` on purpose - the comments explain the caching-proxy failure they prevent.
