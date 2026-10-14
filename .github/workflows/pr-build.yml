@@ -1,5 +1,5 @@
 # ─── PR Build ────────────────────────────────────────────────
-# On a pull request into main, builds what the release ships, without
+# On a pull request into dev or main, builds what the release ships, without
 # publishing any of it, so a broken build shows up before the merge instead
 # of after the tag:
 #   - the Docker image for both platforms, started once and checked through
@@ -7,16 +7,14 @@
 #   - the CLI binaries for all five targets, signed like the release and
 #     each started once with --version where the runner can execute it
 #
-# Its own workflow rather than jobs of Validate, since the release calls
-# Validate and would list these jobs as skipped. Pull requests into dev only
-# run Validate.
+# A pull request into dev builds what its changes reach: the image when a file
+# it is built from changed, the binaries when a file of the CLI changed. A
+# pull request into main, the release about to be tagged, builds both always.
+# Nothing waits for an approval. v3.1.0 was tagged with a Windows build that
+# failed, because this workflow used to wait for one that nobody gave.
 #
-# One job, Approve, waits for an approval through the environment pr-build,
-# whose required reviewers are set in the settings of the repository, and every
-# build job waits for Approve. GitHub asks for a review once per job that names
-# the environment, so only Approve names it: a run sends one request, not one
-# per build job. Until someone approves it the jobs wait, so the build stays
-# optional.
+# Its own workflow rather than jobs of Validate, since the release calls
+# Validate and would list these jobs as skipped.
 
 name: PR Build
 
@@ -24,6 +22,7 @@ on:
   pull_request:
     branches:
       - main
+      - dev
 
 concurrency:
   group: pr-build-${{ github.ref }}
@@ -33,17 +32,52 @@ permissions:
   contents: read
 
 jobs:
-  approve:
-    name: Approve
-    environment: pr-build
+  # What a pull request into dev touches, like the Changes job of validate.yml. Compares the
+  # merge commit with its base, which takes the last two commits only.
+  changes:
+    name: Changes
     runs-on: ubuntu-latest
+    outputs:
+      docker: ${{ steps.check.outputs.docker }}
+      cli: ${{ steps.check.outputs.cli }}
     steps:
-      - name: Approved
-        run: echo "The build jobs start now."
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      - id: check
+        env:
+          BASE: ${{ github.base_ref }}
+          # What the Dockerfile copies and builds, the admin CLI and the stubs of the client
+          # included, and this workflow.
+          DOCKER: >-
+            ^(apps/(server|web|cli)|packages)/|^apps/client/(package\.json$|stubs/)|^workers/instances/package\.json$|^(Dockerfile|\.dockerignore|docker-entrypoint\.sh|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|tsconfig\.json)$|^\.github/workflows/pr-build\.yml$
+          # What the binaries are compiled from, the version of Bun included, and this workflow.
+          CLI: >-
+            ^(apps/client|packages)/|^(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|tsconfig\.json|\.bun-version)$|^\.github/workflows/pr-build\.yml$
+        run: |
+          if [ "$BASE" != "dev" ]; then
+            echo "docker=true" >> "$GITHUB_OUTPUT"
+            echo "cli=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A failing diff fails this job, so a build is never skipped by mistake. Notes for the
+          # assistant change no behavior, even inside apps/.
+          changed=$(git diff --name-only HEAD^1 HEAD | grep -vE '(^|/)CLAUDE\.md$' || true)
+          for kind in docker cli; do
+            pattern=$([ "$kind" = docker ] && echo "$DOCKER" || echo "$CLI")
+            if printf '%s\n' "$changed" | grep -qE "$pattern"; then
+              echo "$kind=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "Nothing the $kind build covers changed."
+              echo "$kind=false" >> "$GITHUB_OUTPUT"
+            fi
+          done
 
   docker:
     name: Docker (${{ matrix.suffix }})
-    needs: approve
+    needs: changes
+    if: needs.changes.outputs.docker == 'true'
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -103,7 +137,8 @@ jobs:
 
   cli:
     name: CLI (${{ matrix.target }})
-    needs: approve
+    needs: changes
+    if: needs.changes.outputs.cli == 'true'
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -134,9 +169,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # The version of .bun-version, the same as the release. "latest" asked the GitHub API for
+      # the tags of Bun, which once answered the Windows build of a release with 403.
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version-file: .bun-version
 
       - uses: pnpm/action-setup@v6
 
