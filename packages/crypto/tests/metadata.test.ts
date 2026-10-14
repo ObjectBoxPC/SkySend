@@ -4,6 +4,8 @@ import {
   decryptMetadata,
   decryptRequestMetadata,
   expectedPlaintextSize,
+  encryptedMetadataLength,
+  MAX_ENCRYPTED_METADATA_BYTES,
   META_IV_LENGTH,
   METADATA_PAD_BLOCK,
 } from "../src/metadata.js";
@@ -279,6 +281,45 @@ describe("metadata padding", () => {
     await expect(
       decryptMetadata(flipped(encrypted.ciphertext, METADATA_PAD_BLOCK - 1), encrypted.iv, metaKey),
     ).rejects.toThrow();
+  });
+});
+
+describe("encryptedMetadataLength", () => {
+  /** Archive metadata whose JSON is exactly `bytes` long, through the length of one name. */
+  function archiveOf(bytes: number, char = "a"): ArchiveMetadata {
+    const base: ArchiveMetadata = { type: "archive", files: [{ name: "", size: 1 }], totalSize: 1 };
+    const fill = bytes - new TextEncoder().encode(JSON.stringify(base)).length;
+    const width = new TextEncoder().encode(char).length;
+    const name = char.repeat(Math.floor(fill / width)) + "a".repeat(fill % width);
+    return { ...base, files: [{ name, size: 1 }] };
+  }
+
+  it("should match the ciphertext encryptMetadata makes, at and around a block", async () => {
+    const { metaKey } = await deriveKeys(generateSecret(), generateSalt());
+    const lengths = [70, METADATA_PAD_BLOCK - 1, METADATA_PAD_BLOCK, METADATA_PAD_BLOCK + 1, 5000];
+    for (const bytes of lengths) {
+      const metadata = archiveOf(bytes);
+      expect(new TextEncoder().encode(JSON.stringify(metadata)).length).toBe(bytes);
+      const encrypted = await encryptMetadata(metadata, metaKey);
+      expect(encryptedMetadataLength(metadata)).toBe(encrypted.ciphertext.length);
+    }
+  });
+
+  it("should count the bytes of a name in UTF-8, not its characters", async () => {
+    const { metaKey } = await deriveKeys(generateSecret(), generateSalt());
+    const metadata = archiveOf(3000, "日");
+    const encrypted = await encryptMetadata(metadata, metaKey);
+    expect(encryptedMetadataLength(metadata)).toBe(encrypted.ciphertext.length);
+    expect(encrypted.ciphertext.length).toBe(3 * METADATA_PAD_BLOCK + 16);
+  });
+
+  it("should put the limit at the last whole block below 100,000 base64 characters", () => {
+    expect(Math.ceil(MAX_ENCRYPTED_METADATA_BYTES / 3) * 4).toBe(100_000);
+    const blocks = Math.floor((MAX_ENCRYPTED_METADATA_BYTES - 16) / METADATA_PAD_BLOCK);
+    const largest = blocks * METADATA_PAD_BLOCK;
+    const max = MAX_ENCRYPTED_METADATA_BYTES;
+    expect(encryptedMetadataLength(archiveOf(largest))).toBeLessThanOrEqual(max);
+    expect(encryptedMetadataLength(archiveOf(largest + 1))).toBeGreaterThan(max);
   });
 });
 

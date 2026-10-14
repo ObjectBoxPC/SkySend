@@ -10,7 +10,7 @@ import {
   ENCRYPTED_RECORD_SIZE,
 } from "../src/ece.js";
 import { deriveKeys, generateSecret, generateSalt } from "../src/keychain.js";
-import { constantTimeEqual, randomBytes } from "../src/util.js";
+import { asBytes, constantTimeEqual, nonceXorCounter, randomBytes } from "../src/util.js";
 import { flipped } from "./helpers.js";
 
 /** Helper: collect all chunks from a ReadableStream into a single Uint8Array. */
@@ -100,6 +100,163 @@ describe("createEncryptStream nonce header", () => {
       ),
     );
     expect(constantTimeEqual(decrypted, plaintext)).toBe(true);
+  });
+});
+
+/** A stream that hands out `data` in chunks of the given sizes, repeating the list. */
+function chunkedStream(data: Uint8Array, sizes: number[]): ReadableStream<Uint8Array> {
+  let offset = 0;
+  let index = 0;
+  return new ReadableStream({
+    pull(controller) {
+      if (offset >= data.length) {
+        controller.close();
+        return;
+      }
+      const end = Math.min(offset + sizes[index++ % sizes.length]!, data.length);
+      controller.enqueue(data.slice(offset, end));
+      offset = end;
+    },
+  });
+}
+
+/**
+ * Splits a stream into its nonce header and records and opens each record with Web Crypto
+ * directly, so the format is checked without createDecryptStream: a 12-byte header, records of
+ * ENCRYPTED_RECORD_SIZE but the last, record i under the header XOR i.
+ */
+async function openByFormat(fileKey: CryptoKey, encrypted: Uint8Array): Promise<Uint8Array> {
+  const header = encrypted.subarray(0, NONCE_LENGTH);
+  const parts: Uint8Array[] = [];
+  let total = 0;
+  for (let at = NONCE_LENGTH, i = 0; at < encrypted.length; at += ENCRYPTED_RECORD_SIZE, i++) {
+    const record = encrypted.subarray(at, Math.min(at + ENCRYPTED_RECORD_SIZE, encrypted.length));
+    const plain = new Uint8Array(
+      await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: asBytes(nonceXorCounter(header, i)), tagLength: TAG_LENGTH * 8 },
+        fileKey,
+        asBytes(record),
+      ),
+    );
+    parts.push(plain);
+    total += plain.length;
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
+}
+
+// Chunk sizes that land on, before and after every record boundary, plus ones that take
+// several records at once, the way Chromium reads a file and a fetch body can arrive.
+const CHUNKINGS: Array<[string, number[]]> = [
+  ["tiny chunks", [7]],
+  ["one byte short of a record", [RECORD_SIZE - 1]],
+  ["exactly a record", [RECORD_SIZE]],
+  ["one byte over a record", [RECORD_SIZE + 1]],
+  ["an encrypted record", [ENCRYPTED_RECORD_SIZE]],
+  ["several records at once", [3 * RECORD_SIZE + 123]],
+  ["mixed sizes", [1, 65_535, 13, 2 * RECORD_SIZE + 9, 100_000, 5]],
+];
+
+describe("ECE record layout", () => {
+  for (const [name, sizes] of CHUNKINGS) {
+    it(`should write records of the format from ${name}`, async () => {
+      const fileKey = await getFileKey();
+      const plaintext = randomBytes(4 * RECORD_SIZE + 777);
+      const encrypted = await collectStream(
+        chunkedStream(plaintext, sizes).pipeThrough(createEncryptStream(fileKey)),
+      );
+      expect(encrypted.length).toBe(calculateEncryptedSize(plaintext.length));
+      expect(constantTimeEqual(await openByFormat(fileKey, encrypted), plaintext)).toBe(true);
+    });
+
+    it(`should decrypt a stream that arrives in ${name}`, async () => {
+      const fileKey = await getFileKey();
+      const plaintext = randomBytes(4 * RECORD_SIZE + 777);
+      const encrypted = await collectStream(
+        chunkedStream(plaintext, [RECORD_SIZE]).pipeThrough(createEncryptStream(fileKey)),
+      );
+      const decrypted = await collectStream(
+        chunkedStream(encrypted, sizes).pipeThrough(
+          createDecryptStream(fileKey, plaintext.length),
+        ),
+      );
+      expect(constantTimeEqual(decrypted, plaintext)).toBe(true);
+    });
+  }
+
+  it("should write no empty record when the input ends on a record boundary", async () => {
+    const fileKey = await getFileKey();
+    const plaintext = randomBytes(2 * RECORD_SIZE);
+    for (const sizes of [[RECORD_SIZE], [plaintext.length], [RECORD_SIZE - 1]]) {
+      const encrypted = await collectStream(
+        chunkedStream(plaintext, sizes).pipeThrough(createEncryptStream(fileKey)),
+      );
+      expect(encrypted.length).toBe(NONCE_LENGTH + 2 * ENCRYPTED_RECORD_SIZE);
+      const decrypted = await collectStream(
+        chunkedStream(encrypted, sizes).pipeThrough(createDecryptStream(fileKey, plaintext.length)),
+      );
+      expect(constantTimeEqual(decrypted, plaintext)).toBe(true);
+    }
+  });
+
+  it("should keep what it needs of a chunk when the producer reuses its memory", async () => {
+    const fileKey = await getFileKey();
+    const plaintext = randomBytes(RECORD_SIZE + 5000);
+    const original = plaintext.slice();
+
+    // Encrypt: every chunk is overwritten right after the stream took it.
+    const { readable, writable } = createEncryptStream(fileKey);
+    const encryptedPromise = collectStream(readable);
+    const writer = writable.getWriter();
+    for (const [start, end] of [
+      [0, 1000],
+      [1000, RECORD_SIZE + 2000],
+      [RECORD_SIZE + 2000, plaintext.length],
+    ] as const) {
+      const chunk = plaintext.slice(start, end);
+      await writer.write(chunk);
+      chunk.fill(0);
+    }
+    await writer.close();
+    const encrypted = await encryptedPromise;
+    expect(constantTimeEqual(await openByFormat(fileKey, encrypted), original)).toBe(true);
+
+    // Decrypt: the same, with chunks that end inside the header and inside a record.
+    const decryptor = createDecryptStream(fileKey, original.length);
+    const decryptedPromise = collectStream(decryptor.readable);
+    const decryptWriter = decryptor.writable.getWriter();
+    for (const [start, end] of [
+      [0, 5],
+      [5, 3000],
+      [3000, ENCRYPTED_RECORD_SIZE + 50],
+      [ENCRYPTED_RECORD_SIZE + 50, encrypted.length],
+    ] as const) {
+      const chunk = encrypted.slice(start, end);
+      await decryptWriter.write(chunk);
+      chunk.fill(0);
+    }
+    await decryptWriter.close();
+    expect(constantTimeEqual(await decryptedPromise, original)).toBe(true);
+  });
+
+  it("should refuse a stream whose last record is cut down to its tag in any chunking", async () => {
+    const fileKey = await getFileKey();
+    const plaintext = randomBytes(2 * RECORD_SIZE + 100);
+    const encrypted = await collectStream(
+      chunkedStream(plaintext, [RECORD_SIZE]).pipeThrough(createEncryptStream(fileKey)),
+    );
+    // The full records stay, the last one keeps only TAG_LENGTH bytes.
+    const cut = encrypted.slice(0, NONCE_LENGTH + 2 * ENCRYPTED_RECORD_SIZE + TAG_LENGTH);
+    for (const [, sizes] of CHUNKINGS) {
+      await expect(
+        collectStream(chunkedStream(cut, sizes).pipeThrough(createDecryptStream(fileKey))),
+      ).rejects.toThrow("too short to contain auth tag");
+    }
   });
 });
 

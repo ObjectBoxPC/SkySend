@@ -9,7 +9,7 @@ SkySend follows a simple client-server architecture with end-to-end encryption.
 |    Browser (SPA)  |  HTTPS   |   Hono Server     |          |   S3 / Filesystem |
 |                   | <------> |                   | <------> |                   |
 |  React + Crypto   |          |  REST API         |          |  Encrypted Blobs  |
-|  fflate (zip)     |   or     |  SQLite (Drizzle) |          |                   |
+|  Streaming zip    |   or     |  SQLite (Drizzle) |          |                   |
 |  IndexedDB        | <------> |  Storage Adapter  |          |                   |
 +-------------------+  S3 URL  +-------------------+          +-------------------+
                                         ^
@@ -38,7 +38,7 @@ Client                                          Server
 1. Generate secret (32 bytes)
 2. Derive fileKey, metaKey, authKey (HKDF)
 3. Compute authToken, ownerToken
-4. If multi-file: zip with fflate
+4. If multi-file: zip, written while step 7 reads it
 5. WS connect /api/upload/ws -------->  Validate Origin header
 6. Send JSON { type: "init",            Validate headers (shared schema)
      headers: auth, salt, limits }       Reserve quota
@@ -73,7 +73,7 @@ Client                                          Server
 1. Generate secret (32 bytes)
 2. Derive fileKey, metaKey, authKey (HKDF)
 3. Compute authToken, ownerToken
-4. If multi-file: zip with fflate
+4. If multi-file: zip, written while step 6 reads it
 5. POST /api/upload/init ------------>  Validate headers
    (headers: auth, salt, limits)        Create empty storage entry
                                  <----  Return { id }
@@ -311,11 +311,14 @@ apps/web/src/
     api.ts              # API client
     note-editor.ts      # Draft blocks, empty blocks, blocks to send
     highlight.ts        # Code highlighting, sanitized with DOMPurify
-    opfs-download.ts    # OPFS probe, SW stream, download triggers
-    opfs-worker.ts      # Web Worker: fetch + decrypt + OPFS write
+    download-tiers.ts   # The four download tiers, tried in order
+    sw-download.ts      # Tier 1: registers the download Service Worker and drives it
+    opfs-file.ts        # Tier 3: decrypted file written to OPFS, then handed over
+    opfs-file-worker.ts # Web Worker: OPFS writes through a sync access handle
     upload-store.ts     # IndexedDB operations
     upload-worker.ts    # Web Worker: encrypt + upload (WS primary, HTTP fallback)
-    zip.ts              # Client-side zip/unzip (fflate)
+    zip.ts              # Zip of several files, stored and streamed, ZIP64 past 4 GiB
+    archive.ts          # Metadata of several files and its size check
     toast.tsx           # Toast helpers on top of Sonner
     utils.ts            # Utility functions
   i18n/

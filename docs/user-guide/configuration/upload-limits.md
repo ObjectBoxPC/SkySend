@@ -12,7 +12,9 @@ If using a reverse proxy (Nginx, Caddy, etc.), make sure its upload size limit m
 
 ## Maximum Files Per Upload
 
-`FILE_MAX_FILES_PER_UPLOAD` limits the number of files per upload (default: `32`). When users upload multiple files, they are zipped client-side before encryption. `FILE_MAX_SIZE` applies to the total payload size after zipping, not to individual files.
+`FILE_MAX_FILES_PER_UPLOAD` limits the number of files per upload (default: `200`). Several files go up as one zip, which the browser writes while the upload runs, without compression. `FILE_MAX_SIZE` applies to that zip, which is a little larger than the files together, not to individual files.
+
+The names of all files travel in the encrypted metadata, and the server takes at most 75,000 bytes of it. A selection of many files with very long names can reach that before it reaches the file limit, and the upload page says so before anything is sent.
 
 ## Expiry Options
 

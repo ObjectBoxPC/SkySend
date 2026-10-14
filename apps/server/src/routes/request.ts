@@ -10,6 +10,7 @@ import {
   REQUEST_NONCE_LENGTH,
   REQUEST_TOKEN_LENGTH,
   REQUEST_VAULT_LENGTH,
+  MAX_ENCRYPTED_METADATA_BYTES,
   META_IV_LENGTH,
   SALT_LENGTH,
   WRAP_CIPHERTEXT_LENGTH,
@@ -32,7 +33,11 @@ import { getClientIp } from "../middleware/rate-limit.js";
 import type { OidcGuardVariables } from "../middleware/oidc-guard.js";
 import type { createUploadQuota, QuotaReservation } from "../middleware/quota.js";
 import { requestServiceGuard } from "../middleware/request-service.js";
-import { createWsUploadHandler, type WsUploadRefusal } from "../lib/ws-upload.js";
+import {
+  createWsUploadHandler,
+  type WsBufferMemory,
+  type WsUploadRefusal,
+} from "../lib/ws-upload.js";
 import { createSlotHolds, SLOT_HOLD_PATTERN, type SlotHold } from "../lib/slot-holds.js";
 import type { StorageBackend } from "../storage/types.js";
 import type { QuotaVariables } from "../types.js";
@@ -115,15 +120,12 @@ const initSchema = z.object({
   hold: z.string().regex(SLOT_HOLD_PATTERN).optional(),
 });
 
-/** The 100 000 base64 characters POST /api/meta accepts, as bytes. */
-const MAX_ENCRYPTED_META_BYTES = 75_000;
-
 const finalizeSchema = z
   .object({
     wrapEnc: base64urlBytes(WRAP_ENC_LENGTH),
     wrapCiphertext: base64urlBytes(WRAP_CIPHERTEXT_LENGTH),
     // At least the AES-GCM tag and one byte of JSON.
-    encryptedMeta: base64urlBytes(17, MAX_ENCRYPTED_META_BYTES),
+    encryptedMeta: base64urlBytes(17, MAX_ENCRYPTED_METADATA_BYTES),
     metaNonce: base64urlBytes(META_IV_LENGTH),
   })
   .strict();
@@ -286,6 +288,8 @@ export interface RequestRouteOptions {
   quota?: Pick<ReturnType<typeof createUploadQuota>, "middleware" | "reserve">;
   /** Turns on the WebSocket transport, the same as for normal uploads (FILE_UPLOAD_WS). */
   upgradeWebSocket?: UpgradeWebSocket;
+  /** The buffer budget the WebSocket uploads share with normal ones, needed with the transport. */
+  wsMemory?: WsBufferMemory;
 }
 
 /**
@@ -304,6 +308,7 @@ export function createRequestRoute({
   createGuard,
   quota,
   upgradeWebSocket,
+  wsMemory,
 }: RequestRouteOptions) {
   const route = new Hono<{ Variables: QuotaVariables & Partial<OidcGuardVariables> }>();
   route.use("*", requestServiceGuard);
@@ -639,6 +644,8 @@ export function createRequestRoute({
    * part. Registered when FILE_UPLOAD_WS is on.
    */
   if (upgradeWebSocket) {
+    if (!wsMemory) throw new Error("The WebSocket transport needs the shared buffer memory");
+    const memory = wsMemory;
     const refuse = (status: number, error: string): WsUploadRefusal => ({
       error,
       code: 1008,
@@ -650,6 +657,7 @@ export function createRequestRoute({
         {
           storage,
           upgradeWebSocket,
+          memory,
         },
         {
           async open(init, { c, ip }) {

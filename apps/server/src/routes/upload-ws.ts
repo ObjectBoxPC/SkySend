@@ -10,7 +10,7 @@ import {
   validateUploadHeaders,
   type UploadHeaders,
 } from "../lib/upload-validation.js";
-import { createWsUploadHandler } from "../lib/ws-upload.js";
+import { createWsUploadHandler, type WsBufferMemory } from "../lib/ws-upload.js";
 import type { createUploadQuota } from "../middleware/quota.js";
 
 /**
@@ -28,6 +28,8 @@ export interface UploadWsRouteDeps {
   upgradeWebSocket: UpgradeWebSocket;
   /** Reserves the bytes of an upload in its init. The session layer commits or releases them. */
   quota: Pick<ReturnType<typeof createUploadQuota>, "reserve">;
+  /** The buffer budget all WebSocket uploads share, the ones into a file request included. */
+  memory: WsBufferMemory;
 }
 
 export function createUploadWsRoute(deps: UploadWsRouteDeps) {

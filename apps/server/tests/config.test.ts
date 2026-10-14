@@ -42,7 +42,7 @@ describe("config", () => {
       expect(config.RATE_LIMIT_MAX).toBe(60);
       expect(config.FILE_UPLOAD_QUOTA_BYTES).toBe(0);
       expect(config.FILE_UPLOAD_QUOTA_WINDOW).toBe(86400);
-      expect(config.FILE_MAX_FILES_PER_UPLOAD).toBe(32);
+      expect(config.FILE_MAX_FILES_PER_UPLOAD).toBe(200);
       expect(config.NOTE_MAX_SIZE).toBe(1024 ** 2);
       expect(config.NOTE_EXPIRE_OPTIONS_SEC).toEqual([300, 3600, 86400, 604800]);
       expect(config.NOTE_DEFAULT_EXPIRE_SEC).toBe(86400);
@@ -426,6 +426,63 @@ describe("config", () => {
       process.env.STORAGE_BACKEND = "s3";
       // S3_BUCKET, S3_REGION, S3_ACCESS_KEY, S3_SECRET_KEY intentionally absent
       await expect(loadFreshConfig()).rejects.toThrow("STORAGE_BACKEND=s3 requires");
+    });
+
+    it("should hold S3 parts in flight to the default budget unless S3_MEMORY_LIMIT says otherwise", async () => {
+      const { defaultMemoryBudget } = await import("../src/lib/config.js");
+      expect((await loadFreshConfig()).S3_MEMORY_LIMIT).toBe(defaultMemoryBudget());
+      vi.resetModules();
+      process.env.S3_MEMORY_LIMIT = "1GB";
+      expect((await loadFreshConfig()).S3_MEMORY_LIMIT).toBe(1024 ** 3);
+    });
+
+    it("should refuse an S3_MEMORY_LIMIT below 5MB", async () => {
+      process.env.S3_MEMORY_LIMIT = "4MB";
+      await expect(loadFreshConfig()).rejects.toThrow();
+    });
+  });
+
+  describe("memory budgets", () => {
+    const MB = 1024 ** 2;
+    const GB = 1024 ** 3;
+
+    it("should default to a quarter of the memory limit of a container, at most 256MB", async () => {
+      const { defaultMemoryBudget } = await import("../src/lib/config.js");
+      expect(defaultMemoryBudget(512 * MB, 32 * GB)).toBe(128 * MB);
+      expect(defaultMemoryBudget(8 * GB, 32 * GB)).toBe(256 * MB);
+    });
+
+    it("should take the RAM of the machine when no container limits the process", async () => {
+      const { defaultMemoryBudget } = await import("../src/lib/config.js");
+      expect(defaultMemoryBudget(0, 512 * MB)).toBe(128 * MB);
+      expect(defaultMemoryBudget(undefined, 512 * MB)).toBe(128 * MB);
+      // Node reports a number beyond the RAM of the machine for a cgroup without a limit.
+      expect(defaultMemoryBudget(2 ** 62, 512 * MB)).toBe(128 * MB);
+      expect(defaultMemoryBudget(0, 32 * GB)).toBe(256 * MB);
+    });
+
+    it("should fall back to 256MB when no memory is known", async () => {
+      const { defaultMemoryBudget } = await import("../src/lib/config.js");
+      expect(defaultMemoryBudget(undefined, 0)).toBe(256 * MB);
+      expect(defaultMemoryBudget(0, Number.NaN)).toBe(256 * MB);
+    });
+
+    it("should keep at least 16MB on a very small machine", async () => {
+      const { defaultMemoryBudget } = await import("../src/lib/config.js");
+      expect(defaultMemoryBudget(32 * MB, 32 * GB)).toBe(16 * MB);
+    });
+
+    it("should limit the buffers of all WebSocket uploads to the default budget unless set", async () => {
+      const { defaultMemoryBudget } = await import("../src/lib/config.js");
+      expect((await loadFreshConfig()).FILE_UPLOAD_WS_MEMORY_LIMIT).toBe(defaultMemoryBudget());
+      vi.resetModules();
+      process.env.FILE_UPLOAD_WS_MEMORY_LIMIT = "64MB";
+      expect((await loadFreshConfig()).FILE_UPLOAD_WS_MEMORY_LIMIT).toBe(64 * MB);
+    });
+
+    it("should refuse a FILE_UPLOAD_WS_MEMORY_LIMIT below 1MB", async () => {
+      process.env.FILE_UPLOAD_WS_MEMORY_LIMIT = "512KB";
+      await expect(loadFreshConfig()).rejects.toThrow();
     });
   });
 

@@ -15,6 +15,8 @@ import {
 import * as api from "@/lib/api";
 import { saveDecryptedDownload, type DownloadDebugInfo } from "@/lib/download-tiers";
 import { isSafari, isFirefox, isDevToolsOpen, SAFARI_BIG_SIZE, formatBytes } from "@/lib/utils";
+import { opfsFits } from "@/lib/opfs-file";
+import { createSpeedMeter } from "@/lib/speed";
 
 export type DownloadPhase =
   | "idle"
@@ -260,9 +262,15 @@ export function useDownload() {
           return;
         }
 
-        // Safari large-file warning (like Mozilla Send's noStreams warning).
-        // Show before doing any crypto work.
-        if (!forceSafari && isSafari() && info.size > SAFARI_BIG_SIZE) {
+        // Safari large-file warning (like Mozilla Send's noStreams warning), only where the
+        // file cannot go to disk through OPFS, like in a private window. Show before doing any
+        // crypto work.
+        if (
+          !forceSafari &&
+          isSafari() &&
+          info.size > SAFARI_BIG_SIZE &&
+          !(await opfsFits(info.size))
+        ) {
           setState((s) => ({
             ...s,
             phase: "safari-warning",
@@ -337,23 +345,17 @@ export function useDownload() {
           error: null,
         }));
 
-        // Speed calculation helper - shared across all download tiers. A tier that
-        // falls back starts again at 0, which also resets the speed baseline.
-        let lastLoaded = 0;
-        let lastTime = performance.now();
+        // Speed calculation helper - shared across all download tiers, averaged over the
+        // last 3 seconds like for uploads (lib/speed.ts) and shown twice a second at most.
+        const meter = createSpeedMeter();
+        let lastShown = performance.now();
         const updateProgress = (progress: number, loaded: number) => {
           const now = performance.now();
-          if (loaded < lastLoaded) {
-            lastLoaded = loaded;
-            lastTime = now;
-          }
-          const elapsed = (now - lastTime) / 1000;
+          const bytesPerSec = meter.add(loaded);
           let speed: string | null = null;
-          if (elapsed >= 0.5) {
-            const bytesPerSec = (loaded - lastLoaded) / elapsed;
+          if (now - lastShown >= 500 && bytesPerSec !== null) {
             speed = `${formatBytes(bytesPerSec)}/s`;
-            lastLoaded = loaded;
-            lastTime = now;
+            lastShown = now;
           }
           setState((s) => ({
             ...s,

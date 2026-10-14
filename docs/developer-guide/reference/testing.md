@@ -133,12 +133,13 @@ Without Caddy or Docker, a local run leaves out the setups behind them and says 
 Three checks run wherever a test shares, uploads or downloads:
 
 - **Nothing secret reaches the server.** Each test names what only the sender and the recipient may know: the key from the link fragment, the filenames, passwords, note text and a stretch of each file. After the test, everything the proxy recorded is searched for them, in URLs, headers, request bodies and WebSocket frames. The search runs on the server side because Playwright does not see all traffic in every browser. `guard.spec.ts` makes sure the recording sees what a leak would look like.
-- **The download takes the path meant for the browser.** Chromium and Firefox download through the Service Worker (tier 1), WebKit through the Blob fallback (tier 3), see [Download Modes](/developer-guide/download-modes). A tier that fails falls through to the next and the download still arrives, so the tests check the tier the app logged as well.
+- **The download takes the path meant for the browser.** Chromium and Firefox download through the Service Worker (tier 1), WebKit through the Blob fallback (tier 4), since its OPFS on Linux reads back an empty file, see [Download Modes](/developer-guide/download-modes). Safari on a Mac takes OPFS (tier 3), which `service-worker.spec.ts` covers in Firefox with Service Workers blocked. A tier that fails falls through to the next and the download still arrives, so the tests check the tier the app logged as well.
 - **Uploads take the transport of the setup.** A broken WebSocket would fall back to chunks without a word, so every upload has to log the transport its setup offers.
 
 | File | Tests |
 | --- | --- |
 | `files.spec.ts` | A file byte for byte, one of 32 MB in several chunks, several files as a zip, a password, a download limit |
+| `archive.spec.ts` | A folder keeps its subfolders in the zip, and names too long together for the server stop an upload before it starts |
 | `notes.spec.ts` | A note of text, password and code blocks, a password, burn after reading |
 | `requests.spec.ts` | Files into a request and out of the inbox, files and a note as one submission, an inbox with a password |
 | `request-lifecycle.spec.ts` | A closed request and a full one turn senders away, an inbox deletes one file and then the request |
@@ -153,6 +154,7 @@ Three checks run wherever a test shares, uploads or downloads:
 | `cli.spec.ts` | The CLI and the browser open each other's shares, with a password both ways, and a note made in the CLI |
 | `guard.spec.ts` | The recording of the proxy sees headers, bodies and WebSocket frames |
 | `transport.spec.ts` | The page arrives over HTTP/1.1 or HTTP/2 as its setup promises, and an upload takes its transport |
+| `service-worker.spec.ts` | The download Service Worker controls no page, a registration of an older release for the whole origin is replaced and downloads still take tier 1, and a download without a Service Worker goes through OPFS |
 | `compat.spec.ts` | Every link of an older release still opens after an update, see below |
 
 The **E2E Tests** jobs in `.github/workflows/validate.yml` run them on pull requests, one job per browser. A pull request into `dev` that changes nothing they build, run or read skips them, like one that only touches the website, the Workers or other docs. The **Changes** job decides that from the changed files in a few seconds. Pull requests into `main`, the release and a run started by hand always run them. `E2E_BROWSER` picks the engine, and a run then starts only the servers, proxies and containers that engine's projects need, so the Firefox job never pulls the S3 store. The same works locally, like `E2E_BROWSER=webkit pnpm test:e2e`, or with a list like `chromium,webkit`. When a job fails, its report with screenshots, videos and traces is attached to the run as the `e2e-report-<browser>` artifact. A trace opens with `pnpm --filter @skysend/e2e exec playwright show-trace <trace.zip>`.
@@ -169,6 +171,29 @@ E2E_LARGE_SIZE=314572800 pnpm test:e2e:large
 ```
 
 `pnpm test:e2e` leaves it out. The run needs about 11 GB of free disk, since the server holds the ciphertext while the download arrives beside it, and checks that before it writes anything. It keeps everything on the disk of the checkout, the source in `e2e/test-results/` and the server data and the download in `e2e/.large-files/`, never in the temp folder, which some systems keep in memory. A finished run leaves none of it behind.
+
+### Measuring uploads and downloads
+
+The tests check that a transfer works, `e2e/bench/` measures how well. `transfer.mjs` sends a file up through the real app in a real browser and downloads it again, against the built server, and records the speed of every hop over time: what the upload worker reports and the UI shows, what reaches the server, and with S3 what the server sends to the bucket and the browser downloads from it. Two plain TCP relays count those bytes without changing them. It also samples the CPU and memory of the server and the browser, compares the download with the source, and with S3 lists the multipart uploads a run left in the bucket. It is not a test and runs in no CI job.
+
+```bash
+# Build first
+pnpm test:e2e:build
+
+# 2 GiB up and down in Firefox against a local SeaweedFS
+pnpm --filter @skysend/e2e bench --browser firefox --storage s3 --size 2048
+
+# The timeline of the last run, every 500 ms
+node e2e/bench/timeline.mjs
+
+# A slower network: 1 Gbit/s to the server, 400 Mbit/s with 30 ms round trip to the bucket
+sudo e2e/bench/shape.sh apply 1gbit 5ms 400mbit 15ms
+sudo e2e/bench/shape.sh clear
+```
+
+With `--uploads N --downloads M` it runs that many transfers at the same time, each in a context of its own, or with `--separate` in a browser of its own like people on other machines, and reports each one's speed while all ran and how evenly they shared (Jain's index, 1 is perfectly even), plus what the disk read and wrote.
+
+`pipeline.mjs` measures the stages of the browser alone, in a Web Worker like the app's: reading the file, `createEncryptStream`, raw AES-GCM and sending over a WebSocket to a sink that throws the bytes away. The stage that is slowest alone is the one that caps an upload. `e2e/bench/README.md` lists every option.
 
 ### Links from older releases
 

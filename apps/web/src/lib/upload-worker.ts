@@ -33,7 +33,7 @@ import {
 } from "@skysend/crypto";
 import { argon2id } from "hash-wasm";
 import { z } from "zod";
-import { streamingZip } from "./zip";
+import { zipSize, zipStream } from "./zip";
 
 const hashWasmArgon2: Argon2idHashFn = async (
   password: Uint8Array,
@@ -76,7 +76,7 @@ function holdOf(answer: unknown): string | undefined {
 export interface UploadWorkerRequest {
   /** File to upload (single-file mode). */
   file?: File;
-  /** Files to zip and upload (multi-file mode). */
+  /** Files to zip and upload (multi-file mode), named in the zip as `metadata` lists them. */
   files?: File[];
   /** Master secret (32 bytes). Transferred. */
   secret: ArrayBuffer;
@@ -113,7 +113,6 @@ export interface UploadWorkerRequest {
 export type UploadWorkerMessage =
   | { type: "phase"; phase: string }
   | { type: "progress"; loaded: number; total: number }
-  | { type: "pack-done"; durationMs: number; inputBytes: number; outputBytes: number }
   | { type: "transport"; transport: "ws" | "http"; fallback: boolean }
   | { type: "storage"; backend: "s3" | "filesystem" }
   | {
@@ -169,29 +168,19 @@ self.onmessage = async (e: MessageEvent<UploadWorkerRequest>) => {
     if (msg.file) {
       plaintextStream = msg.file.stream();
       plaintextSize = msg.file.size;
-    } else if (msg.files && msg.files.length > 0) {
-      // Streaming ZIP: read files one at a time, report byte-accurate progress
-      const inputBytes = msg.files.reduce((sum, f) => sum + f.size, 0);
-      post({ type: "phase", phase: "zipping" });
-      const packStart = Date.now();
-      const zipResult = await streamingZip(msg.files, (bytesRead, totalBytes) => {
-        post({ type: "progress", loaded: bytesRead, total: totalBytes });
-      });
-      post({ type: "pack-done", durationMs: Date.now() - packStart, inputBytes, outputBytes: zipResult.totalSize });
-      plaintextSize = zipResult.totalSize;
-      // Stream from the chunks array without concatenating into a single buffer
-      // to avoid exceeding the ~2 GB contiguous ArrayBuffer limit.
-      let chunkIndex = 0;
-      plaintextStream = new ReadableStream<Uint8Array>({
-        pull(controller) {
-          if (chunkIndex >= zipResult.chunks.length) {
-            controller.close();
-            return;
-          }
-          controller.enqueue(zipResult.chunks[chunkIndex]!);
-          chunkIndex++;
-        },
-      });
+    } else if (msg.files && msg.files.length > 0 && msg.metadata.type === "archive") {
+      // The zip is written while the upload reads it, under the names the metadata lists, so
+      // the recipient gets exactly the paths they are shown. WebKit drops webkitRelativePath
+      // when it posts a File to a worker, the metadata built on the page keeps it.
+      const names = msg.metadata.files.map((file) => file.name);
+      if (names.length !== msg.files.length) throw new Error("The file list does not match");
+      const entries = msg.files.map((file, i) => ({
+        name: names[i]!,
+        size: file.size,
+        stream: () => file.stream(),
+      }));
+      plaintextSize = zipSize(entries);
+      plaintextStream = zipStream(entries);
     } else {
       throw new Error("No file or zip data provided");
     }
@@ -229,8 +218,8 @@ self.onmessage = async (e: MessageEvent<UploadWorkerRequest>) => {
 
     const encryptedSize = calculateEncryptedSize(plaintextSize);
 
-    // The archive size is only known once the zip is built. The recipient needs
-    // it to tell a complete download from one the server cut short.
+    // The recipient needs the archive size to tell a complete download from one the server
+    // cut short. The page put the same number into the metadata for its size check.
     const metadata: RequestUploadMetadata =
       msg.metadata.type === "archive"
         ? { ...msg.metadata, archiveSize: plaintextSize }
@@ -525,6 +514,9 @@ async function uploadViaHttpChunks(opts: HttpUploadOpts): Promise<{ id: string; 
   await Promise.all(active);
   if (uploadError) throw uploadError;
 
+  // Every chunk is in, the server may still be writing them to storage, see uploadViaWebSocket.
+  post({ type: "phase", phase: "saving-meta" });
+
   const finalizeRes = await fetch(paths.finalize(uploadId), await finalizeRequest(uploadId));
   if (!finalizeRes.ok) {
     const data = await finalizeRes.json().catch(() => ({ error: "Upload finalize failed" }));
@@ -747,8 +739,15 @@ async function uploadViaWebSocket(opts: WsUploadOpts): Promise<{ id: string; hol
   const { ws, init, finalize, wsError, encryptedStream, encryptedSize, speedLimit, post } = opts;
 
   const FRAME_SIZE = 256 * 1024; // 256 KB per WebSocket frame
-  const HIGH_WATER = 8 * 1024 * 1024; // pause sending above this
-  const LOW_WATER = 2 * 1024 * 1024;
+  // Sending pauses above HIGH_WATER queued in the socket and goes on below LOW_WATER. The
+  // socket is checked every DRAIN_POLL_MS while it drains, since a WebSocket has no event for
+  // that. Checked every 20 ms against 2 MiB, it ran dry between two checks at 100 MiB/s.
+  const HIGH_WATER = 16 * 1024 * 1024;
+  const LOW_WATER = 8 * 1024 * 1024;
+  const DRAIN_POLL_MS = 4;
+  // Progress goes to the page at most this often. One message per frame, more than a thousand
+  // a second on a fast link, left the page behind, so the bar lagged and then jumped.
+  const PROGRESS_INTERVAL_MS = 100;
   const READY_TIMEOUT_MS = 10_000;
   const DONE_TIMEOUT_MS = 5 * 60_000;
 
@@ -827,20 +826,30 @@ async function uploadViaWebSocket(opts: WsUploadOpts): Promise<{ id: string; hol
 
     // Stream encrypted data in small frames with backpressure.
     const reader = encryptedStream.getReader();
+    /** Bytes handed to the socket. What it has not sent yet is in ws.bufferedAmount. */
     let loaded = 0;
-    let carry: Uint8Array | null = null;
+    let lastProgressAt = 0;
     const sendStartedAt = Date.now();
 
-    const drain = async () => {
-      while (ws.bufferedAmount > LOW_WATER) {
+    /** Reports what the socket has really sent, not what waits in its buffer. */
+    const reportProgress = (force: boolean) => {
+      const now = Date.now();
+      if (!force && now - lastProgressAt < PROGRESS_INTERVAL_MS) return;
+      lastProgressAt = now;
+      post({ type: "progress", loaded: Math.max(0, loaded - ws.bufferedAmount), total: encryptedSize });
+    };
+
+    const drain = async (below: number) => {
+      while (ws.bufferedAmount > below) {
         if (fatalError) throw fatalError;
-        await new Promise((r) => setTimeout(r, 20));
+        await new Promise((r) => setTimeout(r, DRAIN_POLL_MS));
+        reportProgress(false);
       }
     };
 
-    const sendFrame = async (frame: Uint8Array) => {
+    const sendFrame = async (frame: Uint8Array<ArrayBuffer>) => {
       if (fatalError) throw fatalError;
-      if (ws.bufferedAmount > HIGH_WATER) await drain();
+      if (ws.bufferedAmount > HIGH_WATER) await drain(LOW_WATER);
 
       // Speed limit: pause if sending faster than the server allows.
       if (speedLimit > 0 && loaded > 0) {
@@ -852,44 +861,43 @@ async function uploadViaWebSocket(opts: WsUploadOpts): Promise<{ id: string; hol
         }
       }
 
-      // Copy into a fresh ArrayBuffer to satisfy strict BufferSource typing
-      // (the source may be a view over a SharedArrayBuffer-typed buffer).
-      const frameCopy = new Uint8Array(frame.byteLength);
-      frameCopy.set(frame);
-      ws.send(frameCopy.buffer);
+      ws.send(frame);
       loaded += frame.byteLength;
-      post({ type: "progress", loaded, total: encryptedSize });
+      reportProgress(false);
     };
 
+    // Every frame is filled once, straight from the records, into a buffer of its own. Joining
+    // the rest of the last record with the next one copied most bytes three times.
+    let frame = new Uint8Array(FRAME_SIZE);
+    let filled = 0;
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
 
-      let buf: Uint8Array;
-      if (carry && carry.byteLength > 0) {
-        buf = new Uint8Array(carry.byteLength + value.byteLength);
-        buf.set(carry);
-        buf.set(value, carry.byteLength);
-        carry = null;
-      } else {
-        buf = value;
-      }
-
       let offset = 0;
-      while (buf.byteLength - offset >= FRAME_SIZE) {
-        await sendFrame(buf.subarray(offset, offset + FRAME_SIZE));
-        offset += FRAME_SIZE;
-      }
-      if (offset < buf.byteLength) {
-        carry = buf.slice(offset);
+      while (offset < value.byteLength) {
+        const take = Math.min(FRAME_SIZE - filled, value.byteLength - offset);
+        frame.set(value.subarray(offset, offset + take), filled);
+        filled += take;
+        offset += take;
+        if (filled === FRAME_SIZE) {
+          await sendFrame(frame);
+          frame = new Uint8Array(FRAME_SIZE);
+          filled = 0;
+        }
       }
     }
-    if (carry && carry.byteLength > 0) {
-      await sendFrame(carry);
-      carry = null;
-    }
+    if (filled > 0) await sendFrame(frame.subarray(0, filled));
+
+    // The bar follows the socket until it has sent everything.
+    await drain(0);
+    reportProgress(true);
 
     if (fatalError) throw fatalError;
+
+    // The server may still be writing what it buffered, to a bucket at the speed of its own
+    // link, which held the bar at 99 % for seconds. The page shows that it is processing.
+    post({ type: "phase", phase: "saving-meta" });
 
     // Send finalize and wait for done.
     ws.send(JSON.stringify({ type: "finalize", ...(finalize ? await finalize(readyId) : {}) }));

@@ -1,9 +1,13 @@
 import { createDecryptStream } from "@skysend/crypto";
-import { ensureSwController, streamDownloadViaSw } from "@/lib/opfs-download";
-import { isSafari, isDevToolsOpen, getBrowserInfo } from "@/lib/utils";
+import { createOpfsFile } from "@/lib/opfs-file";
+import { ensureSwController, streamDownloadViaSw } from "@/lib/sw-download";
+import { isSafari, isFirefox, isDevToolsOpen, getBrowserInfo } from "@/lib/utils";
+
+/** Open DevTools only matter in Firefox, whose network panel keeps a download in memory. */
+const firefoxDevToolsOpen = () => isFirefox() && isDevToolsOpen();
 
 export interface DownloadDebugInfo {
-  tier: "sw" | "file-picker" | "blob" | null;
+  tier: "sw" | "file-picker" | "opfs" | "blob" | null;
   swPath: string | null;
   browser: string;
   devtools: boolean;
@@ -67,13 +71,15 @@ function ownBuffer(bytes: Uint8Array): ArrayBuffer {
 }
 
 /**
- * Decrypts a download and hands it to the browser, trying three tiers in order:
+ * Decrypts a download and hands it to the browser, trying four tiers in order:
  *
  * 1. Service Worker stream, fastest (Chrome, Edge, Brave, Firefox)
  * 2. showSaveFilePicker, zero RAM fallback (Chrome, Edge)
- * 3. Blob, last resort and Safari default (uses the full file size in RAM)
+ * 3. OPFS, the file written to disk and handed over from there (Safari)
+ * 4. Blob, last resort (uses the full file size in RAM)
  *
- * A cancel or a truncated stream ends the download instead of falling back.
+ * A cancel or a truncated stream ends the download instead of falling back, and so does any
+ * failure once tier 3 or 4 fetched the file, since the fetch used up a download of the share.
  */
 export async function saveDecryptedDownload(options: SaveDownloadOptions): Promise<void> {
   const {
@@ -89,9 +95,17 @@ export async function saveDecryptedDownload(options: SaveDownloadOptions): Promi
     onProgress,
     onDebug,
   } = options;
-  const event = (message: string) => ({ time: new Date().toISOString(), message });
+  const event = (message: string, detail?: string) => ({
+    time: new Date().toISOString(),
+    message,
+    ...(detail ? { detail } : {}),
+  });
   const addEvent = (message: string) =>
     onDebug((d) => (d ? { ...d, events: [...d.events, event(message)] } : null));
+  // Why a tier was passed over, shown before the one that ran, so a report of a download that
+  // landed in the Blob tier says what stopped the faster ones.
+  const passed: ReturnType<typeof event>[] = [];
+  const pass = (message: string, detail?: string) => passed.push(event(message, detail));
 
   // Safari terminates Service Workers aggressively and buffers ReadableStream
   // responses in RAM instead of streaming to disk. For large files the caller
@@ -101,14 +115,17 @@ export async function saveDecryptedDownload(options: SaveDownloadOptions): Promi
 
   // Tier 1: Service Worker streaming decryption (non-Safari browsers)
   try {
-    const sw = !safari ? await ensureSwController() : null;
+    if (safari) pass("Service Worker skipped", "Safari never streams it into a download");
+    const sw = !safari
+      ? await ensureSwController((reason) => pass("Service Worker not available", reason))
+      : null;
     if (sw) {
       console.info("[SkySend] Download tier: 1 (SW stream)");
       onDebug(() => ({
         tier: "sw",
         swPath: null,
         browser: getBrowserInfo(),
-        devtools: isDevToolsOpen(),
+        devtools: firefoxDevToolsOpen(),
         fileSize: size,
         events: [event("SW stream started")],
       }));
@@ -139,6 +156,7 @@ export async function saveDecryptedDownload(options: SaveDownloadOptions): Promi
     if (swErr instanceof DOMException && swErr.name === "AbortError") throw swErr;
     if (isTruncated(swErr)) throw swErr;
     console.warn("[SkySend] SW stream failed, trying fallback:", swErr);
+    pass("SW stream failed", swErr instanceof Error ? swErr.message.slice(0, 200) : undefined);
   }
 
   /** Fetches the ciphertext and counts what arrives, with a note in the debug log on a stall. */
@@ -190,9 +208,9 @@ export async function saveDecryptedDownload(options: SaveDownloadOptions): Promi
         tier: "file-picker",
         swPath: null,
         browser: getBrowserInfo(),
-        devtools: isDevToolsOpen(),
+        devtools: firefoxDevToolsOpen(),
         fileSize: size,
-        events: [...(d?.events ?? []), event("Save File Picker started")],
+        events: [...(d?.events ?? []), ...passed.splice(0), event("Save File Picker started")],
       }));
       const fileHandle = await window.showSaveFilePicker({
         suggestedName: filename,
@@ -210,20 +228,71 @@ export async function saveDecryptedDownload(options: SaveDownloadOptions): Promi
       // A failed pipeTo() aborts the writable, which discards the partial file.
       if (isTruncated(pickerErr)) throw pickerErr;
       console.warn("[SkySend] showSaveFilePicker failed:", pickerErr);
+      pass(
+        "Save File Picker failed",
+        pickerErr instanceof Error ? pickerErr.message.slice(0, 200) : undefined,
+      );
+    }
+  } else if (!downloaded) {
+    pass("Save File Picker not available", "This browser has none");
+  }
+
+  // Tier 3: OPFS. Checks everything before it fetches, so a browser without room falls through.
+  if (!downloaded) {
+    const disk = await createOpfsFile(plaintextSize ?? size, (reason) =>
+      pass("OPFS not used", reason),
+    );
+    if (disk) {
+      console.info("[SkySend] Download tier: 3 (OPFS)");
+      onProgress(0, 0);
+      onDebug((d) => ({
+        tier: "opfs",
+        swPath: null,
+        browser: getBrowserInfo(),
+        devtools: firefoxDevToolsOpen(),
+        fileSize: size,
+        events: [...(d?.events ?? []), ...passed.splice(0), event("OPFS file started")],
+      }));
+      let stopStallTimer = () => {};
+      try {
+        const counted = await fetchCounted();
+        stopStallTimer = counted.stopStallTimer;
+        const reader = counted.decrypted.getReader();
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (signal.aborted) {
+            await reader.cancel();
+            throw new DOMException("Download cancelled by user", "AbortError");
+          }
+          await disk.write(value);
+        }
+        disk.save(await disk.finish(), filename);
+        downloaded = true;
+      } catch (opfsErr) {
+        disk.abort();
+        throw opfsErr;
+      } finally {
+        stopStallTimer();
+      }
     }
   }
 
-  // Tier 3: Blob fallback (uses RAM - last resort / Safari default)
+  // Tier 4: Blob fallback (uses RAM - last resort)
   if (!downloaded) {
-    console.warn(`[SkySend] Download tier: 3 (Blob fallback${safari ? " - Safari" : ""})`);
+    console.warn(`[SkySend] Download tier: 4 (Blob fallback${safari ? " - Safari" : ""})`);
     onProgress(0, 0);
     onDebug((d) => ({
       tier: "blob",
       swPath: null,
       browser: getBrowserInfo(),
-      devtools: isDevToolsOpen(),
+      devtools: firefoxDevToolsOpen(),
       fileSize: size,
-      events: [...(d?.events ?? []), event(`Blob fallback started${safari ? " (Safari)" : ""}`)],
+      events: [
+        ...(d?.events ?? []),
+        ...passed.splice(0),
+        event(`Blob fallback started${safari ? " (Safari)" : ""}`),
+      ],
     }));
     const { decrypted, stopStallTimer } = await fetchCounted();
     const reader = decrypted.getReader();

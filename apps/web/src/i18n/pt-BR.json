@@ -389,7 +389,10 @@
       "debug.devtoolsWarningText",
       "debug.started",
       "debug.note",
-      "debug.failed"
+      "debug.failed",
+      "debug.tierOpfs",
+      "debug.tierOpfsShort",
+      "upload.fileListTooLong"
     ],
     "_contributorNote": "Tradução para Português do Brasil (pt-BR) criada seguindo as convenções do projeto. Revisão por falante nativo recomendada."
   },
@@ -479,7 +482,6 @@
     "uploading": "Criptografando e enviando...",
     "encryptingProgress": "Criptografando...",
     "processing": "Processando...",
-    "packing": "Compactando arquivos...",
     "uploadComplete": "Envio concluído!",
     "shareLink": "Compartilhar este link",
     "shareLinkHint": "A chave de criptografia está no fragmento da URL — ela nunca chega ao servidor.",
@@ -488,6 +490,7 @@
     "newUpload": "Novo envio",
     "fileTooLarge": "O arquivo excede o tamanho máximo de {{size}}",
     "tooManyFiles": "Máximo de {{count}} arquivos por envio",
+    "fileListTooLong": "Os nomes destes arquivos são longos demais juntos para um único envio. Escolha menos arquivos ou nomes mais curtos.",
     "fileNotReadable": "Não foi possível ler o arquivo selecionado. Selecione-o novamente e tente."
   },
   "download": {
@@ -683,6 +686,8 @@
     "tierSw": "Stream SW",
     "tierFilePicker": "Salvar arquivo",
     "tierBlob": "Blob",
+    "tierOpfs": "Armazenamento do navegador (OPFS)",
+    "tierOpfsShort": "OPFS",
     "transportWs": "WebSocket",
     "transportHttp": "Blocos HTTP",
     "swPathStream": "ReadableStream",

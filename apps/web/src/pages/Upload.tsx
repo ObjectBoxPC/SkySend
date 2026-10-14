@@ -31,6 +31,7 @@ import { useFaviconProgress } from "@/hooks/useFaviconProgress";
 import { useServerConfig } from "@/hooks/useServerConfig";
 import { useAuth } from "@/hooks/useAuth";
 import { fetchQuota, type QuotaStatus } from "@/lib/api";
+import { archiveMetadataFits } from "@/lib/archive";
 import { fileStart } from "@/lib/defaults";
 import { formatBytes } from "@/lib/utils";
 import { meetsPasswordMinimum } from "@skysend/crypto";
@@ -86,8 +87,8 @@ export function UploadPage() {
   useEffect(() => {
     if (uploadHook.phase === "error" && uploadHook.error) {
       const raw = uploadHook.error;
-      if (raw === "fileNotReadable") {
-        showKnownErrorToast(t("upload.fileNotReadable"));
+      if (raw === "fileNotReadable" || raw === "fileListTooLong") {
+        showKnownErrorToast(t(`upload.${raw}`));
       } else {
         showKnownErrorToast(t(`upload.${raw}`, { defaultValue: raw }));
       }
@@ -170,6 +171,7 @@ export function UploadPage() {
   const totalSize = files.reduce((sum, f) => sum + f.size, 0);
   const sizeExceeded = totalSize > config.fileMaxSize;
   const tooManyFiles = files.length > config.fileMaxFilesPerUpload;
+  const listTooLong = !tooManyFiles && !archiveMetadataFits(files);
   const quotaExceeded = quota?.enabled && totalSize > quota.remaining;
   // A password that is switched on has to be typed, or the link would go out without one, and
   // long enough to hold against guessing with the link and the server's database.
@@ -177,6 +179,7 @@ export function UploadPage() {
     files.length > 0 &&
     !sizeExceeded &&
     !tooManyFiles &&
+    !listTooLong &&
     !quotaExceeded &&
     !isUploading &&
     (!passwordEnabled || meetsPasswordMinimum(password));
@@ -278,6 +281,11 @@ export function UploadPage() {
               {tooManyFiles && (
                 <p className="px-2 text-sm text-destructive-text" role="alert">
                   {t("upload.tooManyFiles", { count: config.fileMaxFilesPerUpload })}
+                </p>
+              )}
+              {listTooLong && (
+                <p className="px-2 text-sm text-destructive-text" role="alert">
+                  {t("upload.fileListTooLong")}
                 </p>
               )}
               {quotaExceeded && (

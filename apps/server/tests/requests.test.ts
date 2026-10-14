@@ -42,6 +42,7 @@ import { createRequestLimiter, type RequestLimiter } from "../src/lib/request-li
 import { createPasswordLockout, type PasswordLockout } from "../src/lib/password-lockout.js";
 import { runCleanup } from "../src/lib/cleanup.js";
 import { hashToken } from "../src/lib/request-validation.js";
+import { WsBufferMemory } from "../src/lib/ws-upload.js";
 
 const DEFAULT_CONFIG = {
   FILE_MAX_SIZE: 1024 * 1024,
@@ -154,6 +155,7 @@ describe("file requests", () => {
             }
           : undefined,
         upgradeWebSocket: options.upgradeWebSocket,
+        wsMemory: new WsBufferMemory(256 * 1024 * 1024),
       }),
     );
     app.route("/api/inbox", createInboxRoute({ storage, lockout }));
@@ -1584,6 +1586,18 @@ describe("file requests", () => {
         ...(await finalizeBody(publicKey, requestId, uploadId, secret)),
       });
     }
+
+    it("refuses to start the WebSocket transport without the budget it shares with normal uploads", () => {
+      // GHSA-rmc2-p8pp-4vmh: a budget of its own would let both transports fill twice the limit.
+      expect(() =>
+        createRequestRoute({
+          storage,
+          limiter,
+          chunkDir: join(storageCtx.tempDir, "request-chunks"),
+          upgradeWebSocket: createMockUpgrade().upgrade,
+        }),
+      ).toThrow("The WebSocket transport needs the shared buffer memory");
+    });
 
     it("uploads into a request the same way as a normal upload and the requester unwraps it", async () => {
       const mock = createMockUpgrade();

@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
+import { totalmem } from "node:os";
 import { z } from "zod";
 import { isPreviewImage } from "./index-html.js";
 
@@ -21,6 +22,34 @@ function parseByteSize(value: string): number {
     GB: 1024 ** 3,
   };
   return Math.floor(num * multipliers[unit]!);
+}
+
+const MB = 1024 * 1024;
+
+/**
+ * The default of a memory budget like S3_MEMORY_LIMIT: a quarter of the memory this process may
+ * use, at most 256MB and at least 16MB. In a container that is its memory limit, which
+ * `os.totalmem()` does not see, otherwise the RAM of the machine, and 256MB when neither is known.
+ * More only helps an instance with very many uploads at once, which can set it.
+ */
+export function defaultMemoryBudget(
+  constrained: number | undefined = process.constrainedMemory?.(),
+  total: number = totalmem(),
+): number {
+  // Without a limit, Node reports 0 or a number beyond the RAM of the machine.
+  const limited = constrained !== undefined && constrained > 0 && constrained < total;
+  const available = limited ? constrained : total;
+  if (!(available > 0)) return 256 * MB;
+  return Math.min(256 * MB, Math.max(16 * MB, Math.floor(available / 4)));
+}
+
+/** A byte size whose default is defaultMemoryBudget(), with a lower bound. */
+function memoryBudget(name: string, min: number, minText: string) {
+  return z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined ? defaultMemoryBudget() : parseByteSize(v)))
+    .pipe(z.number().int().min(min, `${name} must be at least ${minText}`));
 }
 
 /** Comma-separated list of positive integers. */
@@ -101,7 +130,7 @@ const configSchema = z.object({
 
   FILE_MAX_FILES_PER_UPLOAD: z
     .string()
-    .default("32")
+    .default("200")
     .transform((v) => parseInt(v, 10))
     .pipe(z.number().int().positive()),
 
@@ -148,6 +177,13 @@ const configSchema = z.object({
     .default("16MB")
     .transform((v) => parseByteSize(v))
     .pipe(z.number().int().min(1024 * 1024, "FILE_UPLOAD_WS_MAX_BUFFER must be at least 1MB")),
+
+  /**
+   * Most bytes all WebSocket uploads together, normal ones and those into a file request, hold
+   * in buffers on their way to storage. A session over it pauses its socket until writes free
+   * room, so many uploads at once slow down instead of running the server out of memory.
+   */
+  FILE_UPLOAD_WS_MEMORY_LIMIT: memoryBudget("FILE_UPLOAD_WS_MEMORY_LIMIT", MB, "1MB"),
 
   // --- Note-specific configuration ---
 
@@ -399,15 +435,18 @@ const configSchema = z.object({
 
   S3_PART_SIZE: z
     .string()
-    .default("25MB")
+    .default("8MB")
     .transform((v) => parseByteSize(v))
     .pipe(z.number().int().min(5 * 1024 * 1024, "S3_PART_SIZE must be at least 5MB (S3 minimum)").max(5 * 1024 * 1024 * 1024, "S3_PART_SIZE must be at most 5GB")),
 
   S3_CONCURRENCY: z
     .string()
-    .default("4")
+    .default("8")
     .transform((v) => parseInt(v, 10))
     .pipe(z.number().int().min(1).max(16, "S3_CONCURRENCY must be between 1 and 16")),
+
+  /** Most bytes all uploads to S3 together hold in parts on their way to the bucket. */
+  S3_MEMORY_LIMIT: memoryBudget("S3_MEMORY_LIMIT", 5 * MB, "5MB"),
 
   // --- OIDC authentication (optional) ---
 
@@ -575,6 +614,17 @@ export function loadConfig(): Config {
         `STORAGE_BACKEND=s3 requires: ${missing.join(", ")}`,
       );
     }
+    if (_config.S3_MEMORY_LIMIT < _config.S3_PART_SIZE) {
+      console.warn(
+        "[config] S3_MEMORY_LIMIT is below S3_PART_SIZE, so uploads to S3 send one part at a time",
+      );
+    }
+  }
+
+  if (_config.FILE_UPLOAD_WS_MEMORY_LIMIT < _config.FILE_UPLOAD_WS_MAX_BUFFER) {
+    console.warn(
+      "[config] FILE_UPLOAD_WS_MEMORY_LIMIT is below FILE_UPLOAD_WS_MAX_BUFFER, so a single upload over WebSocket gets less than its buffer",
+    );
   }
 
   // Cross-field validation - OIDC

@@ -120,7 +120,7 @@ Returns server limits and options for the client UI. Each field comes from the [
 {
   "enabledServices": ["file", "note"],
   "fileMaxSize": 2147483648,
-  "fileMaxFilesPerUpload": 32,
+  "fileMaxFilesPerUpload": 200,
   "fileExpireOptions": [300, 3600, 86400, 604800],
   "fileDefaultExpire": 86400,
   "fileDownloadOptions": [1, 2, 3, 4, 5, 10, 20, 50, 100],

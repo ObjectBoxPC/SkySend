@@ -79,10 +79,18 @@ export function DebugPanel({ downloadInfo, uploadInfo }: DebugPanelProps) {
       ? {
           sw: t("debug.tierSw"),
           "file-picker": t("debug.tierFilePicker"),
+          opfs: t("debug.tierOpfs"),
           blob: t("debug.tierBlob"),
         }[downloadInfo.tier]
       : "–";
-    facts.push({ icon: Zap, label: t("debug.tier"), value: method, live: !!downloadInfo.tier });
+    // The card is narrow, so the long name of tier 3 stays in the summary line above it.
+    const shortMethod = downloadInfo.tier === "opfs" ? t("debug.tierOpfsShort") : method;
+    facts.push({
+      icon: Zap,
+      label: t("debug.tier"),
+      value: shortMethod,
+      live: !!downloadInfo.tier,
+    });
     if (downloadInfo.swPath) {
       facts.push({ icon: ArrowRight, label: t("debug.swPath"), value: t("debug.swPathStream") });
     }
