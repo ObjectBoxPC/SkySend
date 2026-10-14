@@ -3,7 +3,7 @@ import { defineConfig } from 'vitepress'
 // https://vitepress.dev/reference/site-config
 export default defineConfig({
   title: 'SkySend | Docs',
-  description: 'Minimalist, self-hostable, end-to-end encrypted file sharing. Zero knowledge - the server never sees your data.',
+  description: 'Minimalist, self-hostable, end-to-end encrypted file and note sharing. Zero knowledge - the server never sees your data.',
   lang: 'en-US',
   srcExclude: ['CLAUDE.md'], // Contributor guide, not a published docs page
   cleanUrls: true,
@@ -17,20 +17,20 @@ export default defineConfig({
   head: [
     ['link', { rel: 'icon', type: 'image/svg+xml', href: '/logo.svg' }],
     ['link', { rel: 'icon', type: 'image/png', href: '/logo.png' }],
-    ['meta', { name: 'keywords', content: 'file sharing, end-to-end encryption, self-hosted, zero knowledge, encrypted upload, docker, open source' }],
+    ['meta', { name: 'keywords', content: 'file sharing, encrypted notes, file requests, end-to-end encryption, self-hosted, zero knowledge, encrypted upload, docker, open source' }],
     ['meta', { name: 'author', content: 'Skyfay' }],
     ['meta', { name: 'robots', content: 'index, follow' }],
     ['meta', { property: 'og:type', content: 'website' }],
-    ['meta', { property: 'og:title', content: 'SkySend - Encrypted File Sharing' }],
-    ['meta', { property: 'og:description', content: 'Minimalist, self-hostable, end-to-end encrypted file sharing. Zero knowledge - the server never sees your data.' }],
+    ['meta', { property: 'og:title', content: 'SkySend - Encrypted File & Note Sharing' }],
+    ['meta', { property: 'og:description', content: 'Minimalist, self-hostable, end-to-end encrypted file and note sharing. Zero knowledge - the server never sees your data.' }],
     ['meta', { name: 'twitter:card', content: 'summary_large_image' }],
-    ['meta', { name: 'twitter:title', content: 'SkySend - Encrypted File Sharing' }],
-    ['meta', { name: 'twitter:description', content: 'Minimalist, self-hostable, end-to-end encrypted file sharing. Zero knowledge - the server never sees your data.' }],
+    ['meta', { name: 'twitter:title', content: 'SkySend - Encrypted File & Note Sharing' }],
+    ['meta', { name: 'twitter:description', content: 'Minimalist, self-hostable, end-to-end encrypted file and note sharing. Zero knowledge - the server never sees your data.' }],
     ['script', { type: 'application/ld+json' }, JSON.stringify({
       '@context': 'https://schema.org',
       '@type': 'SoftwareApplication',
       'name': 'SkySend',
-      'description': 'Minimalist, self-hostable, end-to-end encrypted file sharing',
+      'description': 'Minimalist, self-hostable, end-to-end encrypted file and note sharing',
       'applicationCategory': 'DeveloperApplication',
       'operatingSystem': 'Docker, Linux',
       'offers': {
@@ -181,7 +181,8 @@ export default defineConfig({
     },
 
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/Skyfay/SkySend' }
+      { icon: 'github', link: 'https://github.com/Skyfay/SkySend' },
+      { icon: 'discord', link: 'https://dc.skyfay.ch' }
     ],
 
     footer: {

@@ -250,6 +250,17 @@ describe("isDevToolsOpen", () => {
     expect(isDevToolsOpen()).toBe(true);
   });
 
+  it("returns false on a touch screen, whose browser bars alone make the gap", () => {
+    vi.stubGlobal("window", {
+      outerWidth: 430,
+      innerWidth: 430,
+      outerHeight: 932,
+      innerHeight: 700,
+      matchMedia: (query: string) => ({ matches: query === "(pointer: coarse)" }),
+    });
+    expect(isDevToolsOpen()).toBe(false);
+  });
+
   it("returns false when window dimensions are normal", () => {
     vi.stubGlobal("window", {
       outerWidth: 1600,
@@ -282,6 +293,15 @@ describe("getBrowserInfo", () => {
         "Mozilla/5.0 (X11; Linux x86_64; rv:127.0) Gecko/20100101 Firefox/127.0",
     });
     expect(getBrowserInfo()).toBe("Firefox 127");
+  });
+
+  it("names Brave, whose user agent says Chrome", () => {
+    vi.stubGlobal("navigator", {
+      userAgent:
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+      brave: {},
+    });
+    expect(getBrowserInfo()).toBe("Brave 155");
   });
 
   it("identifies Chrome", () => {

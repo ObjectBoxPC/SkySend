@@ -39,6 +39,18 @@ See the [Environment Variables reference](/user-guide/configuration/environment-
 If you are only testing locally on the same machine, `http://localhost:3000` works without HTTPS because `localhost` is treated as a secure context by browsers.
 :::
 
+## Chrome asks where to save every download
+
+**Symptom:** In Chrome, Edge or Brave, each download opens a save dialog before it starts instead of going straight to the downloads. Under **Technical info** on the download page, **Method** reads "Save File Picker" instead of "SW Stream", and the browser console shows:
+
+```
+[SkySend] SW registration failed: SecurityError: Failed to register a ServiceWorker ... An SSL certificate error occurred when fetching the script.
+```
+
+**Cause:** The instance runs on HTTPS with a certificate the browser does not trust, usually a self-signed one whose warning was clicked away. Encryption still works, because an `https://` page counts as a secure context. Chromium-based browsers refuse to register a Service Worker from such an origin, so SkySend cannot stream the download through it and falls back to the save dialog. [Download Modes](/developer-guide/download-modes) describes both paths.
+
+**Fix:** Serve SkySend with a certificate the browser trusts. Caddy gets one from Let's Encrypt by itself, see the [Reverse Proxy guide](/user-guide/self-hosting/reverse-proxy#caddy-recommended). For an instance that is only reachable inside your network, add the certificate authority that signed its certificate to the trust store of the devices that use it. Clicking through the browser warning is not enough.
+
 ## Upload silently fails or hangs with Nginx
 
 **Symptom:** File uploads stall, disconnect mid-way, or the progress bar freezes.

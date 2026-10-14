@@ -5,10 +5,20 @@ import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn, formatBytes, formatTimeRemaining } from "@/lib/utils";
 import { fileBadge } from "@/lib/file-badge";
+import { sanitizeFilename } from "@/lib/file-request";
 import type { UploadInfo } from "@/lib/api";
-import type { FileMetadata } from "@skysend/crypto";
+import { calculatePlaintextSize, type FileMetadata } from "@skysend/crypto";
 import type { DownloadPhase } from "@/hooks/useDownload";
 import { useNavigate } from "react-router";
+
+/** The size of the file itself, the server only knows the ciphertext with a tag per record. */
+function plaintextSize(encryptedSize: number): number {
+  try {
+    return calculatePlaintextSize(encryptedSize);
+  } catch {
+    return encryptedSize;
+  }
+}
 
 interface DownloadCardProps {
   info: UploadInfo;
@@ -22,7 +32,9 @@ interface DownloadCardProps {
   onCancel?: () => void;
 }
 
-function FileRow({ name, size }: { name: string; size: number }) {
+/** A name from the sender's metadata, shown cleaned like in an inbox, the badge included. */
+function FileRow({ name: sent, size }: { name: string; size: number }) {
+  const name = sanitizeFilename(sent);
   const badge = fileBadge(name);
   return (
     <li className="flex items-center gap-3 rounded-[14px] bg-card py-2 pl-2.5 pr-3 shadow-chip">
@@ -60,7 +72,7 @@ export function DownloadCard({
   const isError = phase === "error";
 
   const stats = [
-    { label: t("download.size"), value: formatBytes(info.size) },
+    { label: t("download.size"), value: formatBytes(plaintextSize(info.size)) },
     { label: t("download.downloads"), value: `${info.downloadCount}/${info.maxDownloads}` },
     { label: t("download.expires"), value: formatTimeRemaining(info.expiresAt) },
   ];

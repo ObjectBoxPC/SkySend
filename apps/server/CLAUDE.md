@@ -50,9 +50,9 @@ src/auth/             OIDC adapters, discovery, PKCE, JWT sessions
 | `POST /api/upload/init`, `/:id/chunk`, `/:id/finalize` | upload session | Chunked HTTP upload |
 | `POST /api/upload` | header tokens | Single-request upload, legacy fallback |
 | `GET /api/upload/ws` | upload session | WebSocket upload, primary path when `FILE_UPLOAD_WS=true` |
-| `POST /api/meta/:id` | owner token | Store encrypted metadata |
+| `POST /api/meta/:id` | owner token | Store encrypted metadata, once: the update only runs while none is stored, since the owner token comes from the link |
 | `GET /api/download/:id` | auth token | Stream ciphertext or hand out a presigned S3 URL |
-| `POST /api/password/:id` | auth token | Password check, rate limited by lockout, returns the metadata of a password-protected upload |
+| `POST /api/password/:id` | auth token | Password check, rate limited by lockout, returns the metadata of a password-protected upload. `410` for an expired or used-up share, like the info |
 | `DELETE /api/upload/:id` | owner token | Delete blob and row |
 | `GET /api/quota` | none | Remaining upload quota for the caller |
 | `POST /api/note`, `POST /api/note/:id` | auth token | Create and view encrypted notes |
@@ -122,8 +122,10 @@ Use the Drizzle query builder. Raw SQL needs a comment explaining why.
 Rules:
 
 - IDs come from `randomUUID()`. Never build a storage path from user input - path traversal is the obvious attack here.
-- S3 uploads are multipart. A failed or abandoned upload must call `abortChunkedUpload` so parts are not billed forever.
-- S3 downloads prefer a presigned URL, which means the browser talks to the bucket directly. The bucket's CORS policy has to allow the instance origin, and `src/index.ts` widens the CSP `connect-src` accordingly.
+- S3 uploads are multipart. A failed or abandoned upload must call `abortChunkedUpload` so parts are not billed forever. `createEmpty(id, size)` gets the declared size: an upload that fits into one part is stored with one PutObject, and the part size grows so no upload needs more than 10,000 parts.
+- The S3 client sends no `Expect: 100-continue` (`expectContinueHeader: false`). With it, the AWS SDK opens a new connection without keep-alive for every body over 2 MB, so each part paid a DNS lookup and a TLS handshake. On a dev machine whose resolver held some of several parallel lookups back by 2.5 s, that kept uploads to R2 at 10 MiB/s, and 54 MiB/s without it (2026-10-13). With a resolver that answers at once the two were within noise of each other. Keep it off.
+- All S3 uploads together hold at most `S3_MEMORY_LIMIT` bytes in parts on their way to the bucket (`PartMemory` in `s3.ts`). Its default, like the one of `FILE_UPLOAD_WS_MEMORY_LIMIT`, is `defaultMemoryBudget()` in `config.ts`: a quarter of what the process may use, the container limit from `process.constrainedMemory()` before the RAM of the machine, at most 256MB, and 256MB when neither is known. The two add up for an upload over WebSocket to S3, which is why neither defaults to the full 256MB in a small container. A part waits for room in `appendChunk`, which is what slows the sender down. Only parts on their way count, never the start of a part still filling up: counting those could leave every upload waiting for room that only more data would free.
+- S3 downloads prefer a presigned URL, which means the browser talks to the bucket directly. The bucket's CORS policy has to allow the instance origin, and `bucketConnectSources()` in `lib/bucket-csp.ts` widens the CSP `connect-src` accordingly. Without `S3_FORCE_PATH_STYLE` the AWS SDK puts the bucket into the host (`<bucket>.<account>.r2.cloudflarestorage.com`), which the CSP has to allow, the Service Worker included since `download-sw.js` carries the same CSP. Releases up to 3.0.1 allowed only the endpoint, which blocked every download from R2 and Hetzner set up as the docs show. The end-to-end tests run SeaweedFS with path style, so only `tests/bucket-csp.test.ts` covers the other form, against URLs the SDK really builds. For AWS without an endpoint it allows the regional host and the host of the own bucket, never `*.s3.<region>.amazonaws.com`, which would let a script that got into the page send data to any bucket of the region.
 - A new backend implements the full interface. Returning `false` from `supportsPresignedUrls()` is a valid answer, silently no-op'ing a method is not.
 
 ## Uploads
@@ -136,9 +138,9 @@ Three transports, one validation path. All of them parse through `uploadHeadersS
 
 **WebSocket** (`src/routes/upload-ws.ts` on top of `src/lib/ws-upload.ts`, which uploads into a file request share): the primary path when `FILE_UPLOAD_WS=true`. Registered only when the flag and the `file` service are both on, and it validates the `Origin` header itself as defence in depth. The request route registers its own handler at `/api/request/:id/upload/ws` when the flag and the `request` service are on. A target adds only its init check, its commit and what to give back when a session ends without a commit, so the framing, buffering, backpressure and keepalive stay one piece of code. A buffer below the 4 MB flush threshold is written out a second after its first frame, and a session that receives less than 1 MiB, or the rest of its upload, in 10 minutes is ended, so a trickling client holds neither memory nor a claim. An empty origin is allowed on purpose so the CLI and curl still work - the comment at that check explains it.
 
-Chunk requests are intentionally exempt from the global rate limiter - the reasoning is written out at the exemption in `src/index.ts`. Read it before changing that condition. The limits in `src/routes/upload.ts` are what bound chunk traffic. The quota does not, it reserves the declared size of an upload at its start.
+Chunk requests are intentionally exempt from the global rate limiter - the reasoning is written out at the exemption in `src/index.ts`. Read it before changing that condition. `skipsRateLimit()` in `middleware/rate-limit.ts` lets only chunks through: every request that opens a session counts, the WebSocket upgrades of both routes included, since an upgrade opens a session like an init (GHSA-rmc2-p8pp-4vmh). Never exempt them again. The limits in `src/routes/upload.ts` are what bound chunk traffic. The quota does not, it reserves the declared size of an upload at its start.
 
-**WebSocket** (`src/routes/upload-ws.ts`): `ws` buffers a whole message before `onMessage` runs, so `src/index.ts` lowers `maxPayload` to 1 MiB. The clients send 256 KiB frames.
+**WebSocket** (`src/routes/upload-ws.ts`): `ws` buffers a whole message before `onMessage` runs, so `src/index.ts` lowers `maxPayload` to 1 MiB. The clients send 256 KiB frames. All WebSocket sessions of both routes share one `WsBufferMemory` (`FILE_UPLOAD_WS_MEMORY_LIMIT`), created once in `src/index.ts` and passed to both, since a budget per route would let them fill twice the limit. A session that receives while the budget is full pauses its socket, and a write that frees room resumes the waiting ones. Nothing is refused, so many users behind one address are not turned away, which a cap per IP would do. A session the server holds back is not ended by the progress timeout, and a connection that sends no init within 30 s is closed. Every byte a session takes from the budget goes back when it is written or when the session closes, `flushChunks` and `close()` are the two places.
 
 ## Rate limiting, quota, and lockout
 
@@ -157,10 +159,10 @@ Order matters and is easy to break:
 1. `logger`, `secureHeaders`, CORS (health first with `*`, then the allowlist from `BASE_URL` + `CORS_ORIGINS`)
 2. `app.onError` - returns a generic message with `Cache-Control: no-store`
 3. `/api` group: `no-store` on every response, then the rate limiter with its chunk and WS exemptions
-4. Service guards, then the routes
-5. `/branding/*`, `/assets/*` (immutable caching), the SPA fallback, then the catch-all static handler
+4. Service guards, then the routes, and last of the `/api` group the JSON 404 for an unknown path, which otherwise fell into the SPA fallback with 200. A route added after it is never reached
+5. `/branding/*`, `/assets/*` (immutable caching, served from memory by `createAssetHandler`), the SPA fallback, then the catch-all static handler
 
-The SPA fallback must stay ahead of the catch-all `serveStatic`, otherwise `GET /` bypasses the `__CUSTOM_TITLE__` injection. Error responses and `index.html` are `no-store` on purpose - the comments explain the caching-proxy failure they prevent.
+The SPA fallback must stay ahead of the catch-all `serveStatic`, otherwise `GET /` bypasses the `__CUSTOM_TITLE__` injection. `/assets/*` goes out as one buffer per response on purpose: streamed, the headers left on their own and TCP held the body back about 200 ms per file on a fresh loopback connection, which is how a reverse proxy on the same host connects. Do not put it back on `serveStatic`. Error responses and `index.html` are `no-store` on purpose - the comments explain the caching-proxy failure they prevent.
 
 Node timeouts at the bottom of the file (`headersTimeout` 60 s, `requestTimeout` 0, `keepAliveTimeout` 120 s) are tuned for slow multi-hour uploads behind a proxy. Each one has a comment. Do not "clean them up".
 

@@ -109,7 +109,7 @@ All file-related variables have been renamed with a `FILE_` prefix (e.g. `MAX_FI
 | --- | --- |
 | Required | No |
 | Type | Integer |
-| Default | `32` |
+| Default | `200` |
 | Range | >= 1 |
 | Description | Maximum files per multi-file upload |
 
@@ -206,6 +206,16 @@ All file-related variables have been renamed with a `FILE_` prefix (e.g. `MAX_FI
 | Default | `16MB` |
 | Minimum | `1MB` |
 | Description | Maximum bytes the server buffers in memory per WebSocket upload session before aborting it with close code `1009`. Only relevant when the storage backend falls behind the incoming frame rate |
+
+### FILE_UPLOAD_WS_MEMORY_LIMIT
+
+| Property | Value |
+| --- | --- |
+| Required | No |
+| Type | Byte size string |
+| Default | A quarter of the memory the server may use, at most `256MB` |
+| Minimum | `1MB` |
+| Description | Most bytes all WebSocket uploads together hold in buffers and writes on their way to storage, normal uploads and uploads into a file request alike. A session that receives a frame while the total is above the limit pauses its socket, and the next write that frees room resumes the waiting sessions, the longest waiting first, once the total is below three quarters of the limit. Nothing is refused, so many uploads at once, from one address or from many, slow down instead of running the server out of memory (GHSA-rmc2-p8pp-4vmh). A session paused by the server is not ended by the progress timeout. The memory the server may use is the limit of its container (`process.constrainedMemory()`), else the RAM of the machine, and `256MB` when neither is known. A larger limit only helps an instance with very many uploads at once on fast storage |
 
 ### NOTE_MAX_SIZE
 
@@ -582,11 +592,11 @@ All file-related variables have been renamed with a `FILE_` prefix (e.g. `MAX_FI
 | Property | Value |
 | --- | --- |
 | Required | No |
-| Type | Byte size (e.g. `25MB`, `50MB`) |
-| Default | `25MB` |
+| Type | Byte size (e.g. `8MB`, `25MB`) |
+| Default | `8MB` |
 | Minimum | `5MB` |
 | Maximum | `5GB` |
-| Description | Size of each S3 multipart upload part. Larger values reduce the number of API round-trips but increase memory usage per upload. The S3 protocol requires at least 5MB per part (except the final part). Increase this if you have high bandwidth and want faster uploads. |
+| Description | Size of each S3 multipart upload part. The server frees the memory of a part only once the bucket has stored all of it, so the sender moves on in steps of one part: smaller parts keep an upload steadier and use less memory, larger ones take fewer requests. An upload whose declared size would need more than 10,000 parts, the most S3 accepts, uses larger parts on its own. An upload that fits into one part is stored with a single request. The S3 protocol requires at least 5MB per part (except the final part). A server holds up to `S3_CONCURRENCY` + 2 parts per upload in memory. |
 
 ### S3_CONCURRENCY
 
@@ -594,9 +604,19 @@ All file-related variables have been renamed with a `FILE_` prefix (e.g. `MAX_FI
 | --- | --- |
 | Required | No |
 | Type | Integer |
-| Default | `4` |
+| Default | `8` |
 | Range | 1-16 |
-| Description | Number of S3 multipart upload parts uploaded in parallel. Higher values improve throughput by overlapping network transfers, but increase memory and bandwidth usage. Good starting values: `4` for most setups, `8` for high-bandwidth connections. |
+| Description | Number of S3 multipart upload parts uploaded in parallel per upload. Higher values improve throughput by overlapping network transfers, which matters most on a connection with a long round trip to the bucket, but increase memory and bandwidth usage. |
+
+### S3_MEMORY_LIMIT
+
+| Property | Value |
+| --- | --- |
+| Required | No |
+| Type | Byte size (e.g. `256MB`, `1GB`) |
+| Default | A quarter of the memory the server may use, at most `256MB` |
+| Minimum | `5MB` |
+| Description | Most bytes all uploads to S3 together hold in parts that are on their way to the bucket. A part is held in memory until the bucket has stored it, so without a limit every upload that is faster than the link to the bucket adds up to `S3_CONCURRENCY` parts, and enough of them at once run a small server out of memory. When the limit is reached, the next part of any upload waits until another one is stored, in the order they asked, and the senders slow down through the usual backpressure. A larger limit does not make uploads faster once the link to the bucket is busy: `256MB` lets four uploads send all their parts at once. The default is a quarter of the memory the server may use, like for `FILE_UPLOAD_WS_MEMORY_LIMIT`, since the two add up for an upload over WebSocket to S3. The WebSocket buffer of an upload counts against `FILE_UPLOAD_WS_MEMORY_LIMIT`, and each upload holds one part outside both limits. A part larger than the limit still goes out when no other part is on its way. |
 
 ### PUID
 

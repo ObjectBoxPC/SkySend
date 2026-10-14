@@ -14,6 +14,7 @@ export {
   computeOwnerToken,
   SECRET_LENGTH,
   SALT_LENGTH,
+  TOKEN_LENGTH,
 } from "./keychain.js";
 export type { DerivedKeys } from "./keychain.js";
 
@@ -35,6 +36,8 @@ export {
   decryptMetadata,
   decryptRequestMetadata,
   expectedPlaintextSize,
+  encryptedMetadataLength,
+  MAX_ENCRYPTED_METADATA_BYTES,
   META_IV_LENGTH,
 } from "./metadata.js";
 export type {

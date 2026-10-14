@@ -32,6 +32,7 @@ import { showKnownErrorToast, showRewrittenLinkWarning } from "@/lib/toast";
 import { NotFoundPage } from "@/pages/NotFound";
 import { wasShareLinkRewritten } from "@/lib/rewritten-link";
 import { measureRequestNote, toDrafts, type DraftBlock } from "@/lib/note-editor";
+import { archiveMetadataFits } from "@/lib/archive";
 import { cn, formatBytes, formatTimeRemaining } from "@/lib/utils";
 
 /**
@@ -60,8 +61,8 @@ export function RequestUploadPage() {
     if (!raw) return;
     // Codes from the worker become a sentence, anything else goes to the known patterns.
     showKnownErrorToast(
-      raw === "fileNotReadable"
-        ? t("upload.fileNotReadable")
+      raw === "fileNotReadable" || raw === "fileListTooLong"
+        ? t(`upload.${raw}`)
         : t(`requestUpload.error.${raw}`, { defaultValue: raw }),
     );
   }, [sender.uploadError, t]);
@@ -136,7 +137,9 @@ export function RequestUploadPage() {
   const totalSize = files.reduce((sum, f) => sum + f.size, 0);
   const tooLarge = totalSize > status.maxUploadSize;
   const tooMany = files.length > status.maxFilesPerUpload;
-  const filesReady = sender.filesSent || (files.length > 0 && !tooLarge && !tooMany);
+  const listTooLong = !tooMany && !archiveMetadataFits(files, true);
+  const filesReady =
+    sender.filesSent || (files.length > 0 && !tooLarge && !tooMany && !listTooLong);
   const firstDrafts = () => (brief.template ? toDrafts(brief.template) : []);
   const drafts = noteDrafts ?? firstDrafts();
   const note = measureRequestNote(drafts, config?.noteMaxSize ?? 0, status.maxUploadSize);
@@ -219,6 +222,11 @@ export function RequestUploadPage() {
         {tooMany && (
           <p className="px-2 text-sm text-destructive-text" role="alert">
             {t("upload.tooManyFiles", { count: status.maxFilesPerUpload })}
+          </p>
+        )}
+        {listTooLong && (
+          <p className="px-2 text-sm text-destructive-text" role="alert">
+            {t("upload.fileListTooLong")}
           </p>
         )}
       </div>

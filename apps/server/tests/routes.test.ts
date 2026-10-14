@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { Hono } from "hono";
 import type { Context, MiddlewareHandler, Next } from "hono";
 import { eq } from "drizzle-orm";
+import { MAX_ENCRYPTED_METADATA_BYTES } from "@skysend/crypto";
 import { createTestDb, createTestStorage, insertTestUpload, TEST_UUID, fakeBase64urlToken } from "./helpers.js";
 import { uploads } from "../src/db/schema.js";
 import type { FileStorage } from "../src/storage/filesystem.js";
@@ -432,6 +433,29 @@ describe("routes", () => {
       expect(upload!.nonce).toBeTruthy();
     });
 
+    it("stores the metadata of only one of two requests that arrive at the same time", async () => {
+      const ownerToken = fakeBase64urlToken();
+      insertTestUpload(dbCtx.db, { ownerToken });
+      const app = new Hono();
+      app.route("/api/meta", metaRoute);
+      const post = (text: string) =>
+        app.request(`/api/meta/${TEST_UUID}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Owner-Token": ownerToken },
+          body: JSON.stringify({
+            encryptedMeta: Buffer.from(text).toString("base64"),
+            nonce: Buffer.from("test-nonce").toString("base64"),
+          }),
+        });
+
+      const [first, second] = await Promise.all([post("first"), post("second")]);
+
+      expect([first.status, second.status].sort()).toEqual([200, 409]);
+      const upload = await dbCtx.db.query.uploads.findFirst({ where: eq(uploads.id, TEST_UUID) });
+      const winner = first.status === 200 ? "first" : "second";
+      expect(Buffer.from(upload!.encryptedMeta!).toString()).toBe(winner);
+    });
+
     it("should reject without owner token", async () => {
       insertTestUpload(dbCtx.db);
 
@@ -448,6 +472,27 @@ describe("routes", () => {
       });
 
       expect(res.status).toBe(401);
+    });
+
+    it("takes the most metadata a client checks for, and nothing beyond", async () => {
+      const post = async (bytes: number) => {
+        const ownerToken = fakeBase64urlToken();
+        dbCtx.db.delete(uploads).where(eq(uploads.id, TEST_UUID)).run();
+        insertTestUpload(dbCtx.db, { ownerToken });
+        const app = new Hono();
+        app.route("/api/meta", metaRoute);
+        return app.request(`/api/meta/${TEST_UUID}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Owner-Token": ownerToken },
+          body: JSON.stringify({
+            encryptedMeta: Buffer.alloc(bytes, 7).toString("base64"),
+            nonce: Buffer.from("test-nonce").toString("base64"),
+          }),
+        });
+      };
+
+      expect((await post(MAX_ENCRYPTED_METADATA_BYTES)).status).toBe(200);
+      expect((await post(MAX_ENCRYPTED_METADATA_BYTES + 1)).status).toBe(400);
     });
 
     it("should reject with wrong owner token", async () => {
@@ -640,6 +685,32 @@ describe("routes", () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.ok).toBe(true);
+    });
+
+    it("answers a share whose downloads are used up like the info does, without its metadata", async () => {
+      const authToken = fakeBase64urlToken();
+      insertTestUpload(dbCtx.db, {
+        authToken,
+        hasPassword: true,
+        passwordSalt: Buffer.from(crypto.getRandomValues(new Uint8Array(16))),
+        passwordAlgo: "argon2id",
+        encryptedMeta: Buffer.from("encrypted-metadata"),
+        nonce: Buffer.from("test-nonce"),
+        downloadCount: 1,
+        maxDownloads: 1,
+      });
+
+      const app = new Hono();
+      app.route("/api/password", createPasswordRoute(mockLockout));
+
+      const res = await app.request(`/api/password/${TEST_UUID}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ authToken }),
+      });
+
+      expect(res.status).toBe(410);
+      expect(await res.text()).not.toContain(Buffer.from("encrypted-metadata").toString("base64"));
     });
 
     it("should reject wrong auth token", async () => {
@@ -1798,11 +1869,12 @@ describe("routes", () => {
   describe("validateUploadHeaders (unit)", () => {
     const validSalt32 = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
     const validPwSalt16 = Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString("base64url");
+    const validToken = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
 
     function makeHeaders(overrides: Partial<UploadHeaders> = {}): UploadHeaders {
       return {
-        authToken: "abc",
-        ownerToken: "abc",
+        authToken: validToken,
+        ownerToken: validToken,
         salt: validSalt32,
         maxDownloads: 1,
         expireSec: 86400,
@@ -1832,6 +1904,23 @@ describe("routes", () => {
       const result = validateUploadHeaders(headers, DEFAULT_CONFIG as ReturnType<typeof getConfig>);
       expect(result?.status).toBe(400);
       expect(result?.message).toContain("Invalid password salt encoding");
+    });
+
+    it.each([
+      ["authToken", "abc", "Auth token must be exactly 32 bytes"],
+      ["ownerToken", "abc", "Owner token must be exactly 32 bytes"],
+      [
+        "authToken",
+        Buffer.from(new Uint8Array(33)).toString("base64url"),
+        "Auth token must be exactly 32 bytes",
+      ],
+    ] as const)("should return 400 when %s is %s", (field, value, message) => {
+      const result = validateUploadHeaders(
+        makeHeaders({ [field]: value }),
+        DEFAULT_CONFIG as ReturnType<typeof getConfig>,
+      );
+      expect(result?.status).toBe(400);
+      expect(result?.message).toBe(message);
     });
 
     it("should return null for valid headers with correct passwordSalt length", () => {

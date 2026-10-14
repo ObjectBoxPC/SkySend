@@ -1,14 +1,19 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { bodyLimit } from "hono/body-limit";
+import { MAX_ENCRYPTED_METADATA_BYTES } from "@skysend/crypto";
 import { getDb } from "../db/index.js";
 import { uploads } from "../db/schema.js";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { ownerMiddleware } from "../middleware/auth.js";
 import type { Upload } from "../db/schema.js";
 
 const metaBodySchema = z.object({
-  encryptedMeta: z.string().min(1).max(100_000),
+  // Base64 of at most MAX_ENCRYPTED_METADATA_BYTES, the limit the clients check before an upload.
+  encryptedMeta: z
+    .string()
+    .min(1)
+    .max(Math.ceil(MAX_ENCRYPTED_METADATA_BYTES / 3) * 4),
   nonce: z.string().min(1).max(100),
 });
 
@@ -61,14 +66,20 @@ metaRoute.post("/:id", ownerMiddleware, bodyLimit({ maxSize: 256 * 1024, onError
     return c.json({ error: "Invalid nonce encoding" }, 400);
   }
 
+  // Only while none is stored: the check above ran before the body was read, so a second
+  // request could have stored its metadata meanwhile.
   const db = getDb();
-  db.update(uploads)
+  const stored = db
+    .update(uploads)
     .set({
       encryptedMeta: metaBuffer,
       nonce: nonceBuffer,
     })
-    .where(eq(uploads.id, upload.id))
+    .where(and(eq(uploads.id, upload.id), isNull(uploads.encryptedMeta)))
     .run();
+  if (stored.changes === 0) {
+    return c.json({ error: "Metadata already set" }, 409);
+  }
 
   return c.json({ ok: true });
 });

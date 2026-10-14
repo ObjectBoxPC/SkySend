@@ -16,8 +16,11 @@ export interface StorageBackend {
    */
   save(id: string, stream: ReadableStream<Uint8Array>): Promise<number>;
 
-  /** Create an empty entry for chunked uploads. */
-  createEmpty(id: string): Promise<void>;
+  /**
+   * Create an empty entry for chunked uploads. `size` is the declared size of the upload,
+   * which a backend may plan by, like S3 picking its part size and how it stores the upload.
+   */
+  createEmpty(id: string, size?: number): Promise<void>;
 
   /**
    * Append a chunk to an existing entry.

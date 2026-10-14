@@ -9,11 +9,12 @@ import { readFile } from "node:fs/promises";
 
 import { loadConfig } from "./lib/config.js";
 import { renderIndexHtml } from "./lib/index-html.js";
+import { createAssetHandler } from "./lib/static-assets.js";
 import { initDatabase, closeDatabase } from "./db/index.js";
 import { createStorage } from "./storage/index.js";
 import { startCleanupJob, runCleanup } from "./lib/cleanup.js";
 import { createRequestLogger } from "./middleware/request-logger.js";
-import { createRateLimiter } from "./middleware/rate-limit.js";
+import { createRateLimiter, skipsRateLimit } from "./middleware/rate-limit.js";
 import { createUploadQuota } from "./middleware/quota.js";
 import { BRANDING_PREFIX, createBrandingStatic } from "./middleware/branding.js";
 import { createPasswordLockout } from "./lib/password-lockout.js";
@@ -23,6 +24,8 @@ import { createRequestLimiter } from "./lib/request-limit.js";
 import { configRoute } from "./routes/config.js";
 import { createUploadRoute } from "./routes/upload.js";
 import { createUploadWsRoute } from "./routes/upload-ws.js";
+import { WsBufferMemory } from "./lib/ws-upload.js";
+import { bucketConnectSources } from "./lib/bucket-csp.js";
 import { metaRoute } from "./routes/meta.js";
 import { infoRoute } from "./routes/info.js";
 import { createDownloadRoute } from "./routes/download.js";
@@ -77,6 +80,8 @@ const { upgradeWebSocket, injectWebSocket, wss } = createNodeWebSocket({ app });
 // in memory before onMessage sees it, and its default of 100 MiB would let a
 // single frame take that much before the declared size is ever checked.
 wss.options.maxPayload = 1024 * 1024;
+// What all WebSocket uploads together may buffer, normal ones and those into a file request.
+const wsMemory = new WsBufferMemory(config.FILE_UPLOAD_WS_MEMORY_LIMIT);
 
 // Build CSP connect-src based on storage backend
 const connectSrc: string[] = ["'self'"];
@@ -88,16 +93,8 @@ if (config.OIDC_ENABLED && config.OIDC_ISSUER) {
     oidcOrigins.push(new URL(config.OIDC_ISSUER).origin);
   } catch { /* invalid URL - already validated in config */ }
 }
-if (config.STORAGE_BACKEND === "s3") {
-  if (config.S3_ENDPOINT) {
-    // Presigned URL mode with custom S3 provider
-    connectSrc.push(config.S3_ENDPOINT.replace(/\/$/, "") + "/");
-  } else if (config.S3_REGION) {
-    // Presigned URL mode with AWS S3
-    connectSrc.push(`https://s3.${config.S3_REGION}.amazonaws.com`);
-    connectSrc.push(`https://*.s3.${config.S3_REGION}.amazonaws.com`);
-  }
-}
+// Presigned S3 downloads go from the browser straight to the bucket, see lib/bucket-csp.ts.
+if (config.STORAGE_BACKEND === "s3") connectSrc.push(...bucketConnectSources(config));
 
 // Allow a custom external logo origin in CSP image sources, local paths remain covered by 'self'.
 const imgSrc: string[] = ["'self'", "data:"];
@@ -218,7 +215,9 @@ api.use("*", async (c, next) => {
 // limiter, because 60 req/min would block a single legitimate large-file upload
 // (a 1 GB file = ~100 chunks at 10 MB each). The same goes for the chunks of an
 // upload into a file request (/request/:id/upload/:uid/chunk), which the pattern
-// below matches too. Opening a session through an init stays rate limited. What
+// below matches too. Opening a session stays rate limited, through the init of a
+// chunked upload and through the upgrade of a WebSocket upload, which opens its
+// session as well (GHSA-rmc2-p8pp-4vmh). What
 // bounds the chunk traffic instead is lib/chunked-upload.ts, shared by both,
 // checked while the body is read (GHSA-9rmm-v3p2-c26g):
 //   1. A chunk body is streamed into a file, never held in memory.
@@ -236,12 +235,7 @@ const passwordLockout = createPasswordLockout(config.PASSWORD_MAX_ATTEMPTS, conf
 const passwordRoute = createPasswordRoute(passwordLockout);
 const noteRoute = createNoteRoute(passwordLockout);
 api.use("*", async (c, next) => {
-  if (/\/upload\/[^/]+\/chunk/.test(c.req.path)) {
-    return next();
-  }
-  if (c.req.path.endsWith("/upload/ws")) {
-    return next();
-  }
+  if (skipsRateLimit(c.req.path)) return next();
   return rateLimiter(c, next);
 });
 
@@ -298,6 +292,7 @@ if (config.FILE_UPLOAD_WS && config.ENABLED_SERVICES.includes("file")) {
     storage,
     upgradeWebSocket,
     quota,
+    memory: wsMemory,
   });
   api.route("/upload/ws", uploadWsRoute);
 }
@@ -320,6 +315,7 @@ api.route(
     quota,
     // The same WebSocket transport as normal uploads, with chunked HTTP as the fallback.
     upgradeWebSocket: config.FILE_UPLOAD_WS ? upgradeWebSocket : undefined,
+    wsMemory,
   }),
 );
 api.route("/inbox", createInboxRoute({ storage, lockout: passwordLockout }));
@@ -339,6 +335,10 @@ if (config.OIDC_ENABLED && config.OIDC_PROTECT_NOTES && oidcAdapter) {
 }
 
 api.route("/note", noteRoute);
+
+// An unknown path under /api gets a JSON 404 instead of the page of the SPA fallback below with
+// 200, which a client would take for an answer. It has to stay the last route of the group.
+api.all("*", (c) => c.json({ error: "Not found" }, 404));
 
 app.route("/api", api);
 
@@ -375,10 +375,8 @@ app.use("/assets/*", async (c, next) => {
     c.res.headers.set("Cache-Control", "no-store");
   }
 });
-app.use(
-  "/assets/*",
-  serveStatic({ root: webDistPath, rewriteRequestPath: (path) => path }),
-);
+// From memory, one buffer per response, see createAssetHandler for the stall a stream caused.
+app.use("/assets/*", await createAssetHandler(join(webDistPath, "assets")));
 
 // SPA fallback with runtime-injected config values.
 // Must come BEFORE the catch-all serveStatic because serveStatic serves

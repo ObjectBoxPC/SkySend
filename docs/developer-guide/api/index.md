@@ -90,7 +90,7 @@ Both tokens are provided as base64url-encoded strings in request headers.
 | `200` | Success |
 | `400` | Invalid request (missing/invalid parameters) |
 | `401` | Invalid or missing auth token |
-| `404` | Upload not found |
+| `404` | Upload not found, or an unknown path under `/api` (`{"error": "Not found"}`) |
 | `409` | Conflict (e.g., metadata already set) |
 | `410` | Upload expired or download limit reached |
 | `429` | Rate limit or quota exceeded |
@@ -120,7 +120,7 @@ Returns server limits and options for the client UI. Each field comes from the [
 {
   "enabledServices": ["file", "note"],
   "fileMaxSize": 2147483648,
-  "fileMaxFilesPerUpload": 32,
+  "fileMaxFilesPerUpload": 200,
   "fileExpireOptions": [300, 3600, 86400, 604800],
   "fileDefaultExpire": 86400,
   "fileDownloadOptions": [1, 2, 3, 4, 5, 10, 20, 50, 100],

@@ -1,9 +1,9 @@
 # ─── Validate ────────────────────────────────────────────────
-# Lint, type checking, unit tests and the builds of the docs and the website
-# run in parallel.
+# Lint, type checking, unit tests, the end-to-end tests in Chromium, Firefox and
+# WebKit and the builds of the docs and the website run in parallel.
 # A quality gate on every pull request into main or dev, and called by the
-# release workflow on tags. The Docker image and the CLI binaries of a pull
-# request into main are built by pr-build.yml.
+# release workflow on tags. It can also be started by hand. The Docker image
+# and the CLI binaries of a pull request into main are built by pr-build.yml.
 
 name: Validate
 
@@ -13,6 +13,7 @@ on:
       - main
       - dev
   workflow_call:
+  workflow_dispatch:
 
 concurrency:
   group: validate-${{ github.ref }}
@@ -102,6 +103,139 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: apps/client/coverage/lcov.info
           flags: client
+
+  # Whether a pull request into dev touches anything the end-to-end tests run, so one that only
+  # changes the website, the Workers or other docs skips them. A pull request into main, the
+  # release and a run by hand always run them. Compares the merge commit with its base, which
+  # takes the last two commits only and no permission beyond reading the code.
+  changes:
+    name: Changes
+    runs-on: ubuntu-latest
+    outputs:
+      e2e: ${{ steps.check.outputs.e2e }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      - id: check
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.base_ref }}
+          # What the end-to-end tests build, run or read. The Nginx setup runs the example of
+          # the reverse proxy guide, so that page counts as code.
+          PATHS: >-
+            ^(apps|packages|e2e)/|^(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|tsconfig\.json)$|^docs/user-guide/self-hosting/reverse-proxy\.md$|^\.github/workflows/validate\.yml$
+        run: |
+          if [ "$EVENT" != "pull_request" ] || [ "$BASE" != "dev" ]; then
+            echo "e2e=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A failing diff fails this job, so the tests are never skipped by mistake.
+          changed=$(git diff --name-only HEAD^1 HEAD)
+          # Notes for the assistant change no behavior, even inside apps/. The whole list is
+          # read before the match, so no command of the pipe ends early on a broken pipe.
+          relevant=$(printf '%s\n' "$changed" | grep -vE '(^|/)CLAUDE\.md$' | grep -E "$PATHS" || true)
+          if [ -n "$relevant" ]; then
+            echo "$relevant"
+            echo "e2e=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Nothing the end-to-end tests cover changed."
+            echo "e2e=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # One job per browser, each installing only its browser and starting only the servers and
+  # services its projects need (E2E_BROWSER in e2e/playwright.config.ts). A red job names the
+  # browser, and the others still finish.
+  e2e:
+    name: E2E Tests (${{ matrix.browser }})
+    needs: changes
+    if: needs.changes.outputs.e2e == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The images of the services each browser runs: Nginx behind Chromium and Firefox, the
+        # S3 store behind Chromium and WebKit. See e2e/scripts/images.mjs.
+        include:
+          - browser: chromium
+            images: nginx s3
+          - browser: firefox
+            images: nginx
+          - browser: webkit
+            images: s3
+    env:
+      E2E_BROWSER: ${{ matrix.browser }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      # Pulls the Docker images in the background while the rest installs. Only a head start:
+      # a service that still misses its image when it starts pulls it itself.
+      - run: nohup node e2e/scripts/images.mjs ${{ matrix.images }} > "$RUNNER_TEMP/images.log" 2>&1 &
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @skysend/e2e exec playwright install --with-deps ${{ matrix.browser }}
+      - run: node e2e/scripts/install-caddy.mjs
+      - run: pnpm test:e2e
+
+      # Screenshots, videos and traces of the failed tests. A trace opens with
+      # `pnpm --filter @skysend/e2e exec playwright show-trace <trace.zip>`.
+      - name: Upload report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-report-${{ matrix.browser }}
+          path: |
+            e2e/playwright-report/
+            e2e/test-results/
+          retention-days: 7
+
+  # A file of 5 GiB up through Nginx with TLS and HTTP/2 and down through the Service Worker of
+  # Chromium, beside the other E2E jobs. See e2e/tests/large.spec.ts.
+  e2e-large:
+    name: E2E Large File
+    needs: changes
+    if: needs.changes.outputs.e2e == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      # The test needs about 11 GB of disk at its peak. Toolchains this job never uses go in the
+      # background, which makes room while the rest installs.
+      - run: sudo nohup rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup > /dev/null 2>&1 &
+
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: nohup node e2e/scripts/images.mjs nginx > "$RUNNER_TEMP/images.log" 2>&1 &
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @skysend/e2e exec playwright install --with-deps chromium
+      - run: df -h /
+      - run: pnpm test:e2e:large
+
+      - name: Upload report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-report-large
+          # Never the file itself, which a test that failed early leaves behind.
+          path: |
+            e2e/playwright-report/
+            e2e/test-results/
+            !e2e/test-results/**/*.bin
+          retention-days: 7
 
   docs-build:
     name: Docs Build

@@ -63,6 +63,16 @@ export function createRateLimiter(config: Config) {
   });
 }
 
+/**
+ * Whether a request passes the global limiter uncounted: only the chunks of a chunked upload,
+ * which lib/chunked-upload.ts bounds instead. Every request that opens an upload is counted,
+ * the init of a chunked upload and the upgrade of a WebSocket upload alike, for normal uploads
+ * and uploads into a file request (GHSA-rmc2-p8pp-4vmh).
+ */
+export function skipsRateLimit(path: string): boolean {
+  return /\/upload\/[^/]+\/chunk$/.test(path);
+}
+
 /** The eight 16-bit groups of a valid IPv6 address, an IPv4 tail like ::ffff:1.2.3.4 included. */
 function ipv6Groups(address: string): number[] {
   let text = address.toLowerCase();

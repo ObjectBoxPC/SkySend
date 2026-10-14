@@ -2,6 +2,120 @@
 
 All notable changes to SkySend are documented here.
 
+## v3.1.0 - Faster Large Transfers, Safari Downloads to Disk and Security Fixes
+
+*Released: October 14, 2026*
+
+### ✨ Features
+
+- **server**: `S3_MEMORY_LIMIT` caps the memory that all uploads to S3 hold together, by default a quarter of the memory the server may use and at most 256MB, so many uploads at once slow down instead of running the server out of memory.
+- **web**: Safari downloads large files to disk instead of into memory, so files of several GB arrive instead of crashing the tab, and it warns before a large download only where that is not possible, like in a private window.
+
+### 🐛 Bug Fixes
+
+- **server**: Uploads to S3 storage no longer fail at the very end when their parts finished uploading out of order, which happened most often with several uploads at once.
+- **server**: A failed or abandoned upload to S3 storage no longer leaves its uploaded parts in the bucket, where the provider kept billing them.
+- **server**: Uploads to S3 storage that need more than 10,000 parts no longer fail, since the part size grows with the size of the upload.
+- **server**: Downloads from S3 storage are no longer blocked by the browser when the provider puts the bucket into the host name, like Cloudflare R2 and Hetzner set up as the docs show.
+- **server**: An unknown address under `/api` answers with a 404 instead of the page of the app.
+- **web**: Uploads in chunks, the fallback when a WebSocket cannot connect, no longer fail in a Chrome incognito window once a file passes 1 to 2 GB.
+- **web**: The technical info of a download no longer claims on a phone, a tablet or a browser other than Firefox that the developer tools are open.
+- **web**: Several files that add up to more than 4 GB arrive as a zip that unzip tools can open, where they reported it as damaged before.
+- **web**: Folders uploaded from Safari keep their subfolders in the zip, where files of the same name in two subfolders overwrote each other.
+- **web**: Files whose names are too long together for the server are refused before the upload starts, instead of failing once every byte is up.
+- **web**: A download in Firefox streams straight to disk even when the page sat open for half a minute before it started, instead of falling back to a slower way after five seconds.
+- **web**: A download page shows the size of the file, where it showed the slightly larger size of its encrypted copy on the server.
+- **website**: The home page and the roadmap no longer scroll sideways on phones.
+
+### 🔒 Security
+
+- **server**: Opening an upload over WebSocket counts against the rate limit like any other upload, and a connection that does not start its upload within 30 seconds is closed. Thanks @barnessomer ([GHSA-rmc2-p8pp-4vmh](https://github.com/Skyfay/SkySend/security/advisories/GHSA-rmc2-p8pp-4vmh))
+- **server**: All uploads over WebSocket together hold at most `FILE_UPLOAD_WS_MEMORY_LIMIT` in memory and slow down once it is reached, so many uploads at once can no longer run the server out of memory. Thanks @barnessomer ([GHSA-rmc2-p8pp-4vmh](https://github.com/Skyfay/SkySend/security/advisories/GHSA-rmc2-p8pp-4vmh))
+- **server**: The metadata of an upload can only be stored once, also when two requests arrive at the same time.
+- **server**: With AWS S3, the content security policy allows downloads from the instance's own bucket only, instead of from every bucket in its region.
+- **server**: The password check of a share whose downloads are used up answers that the share is gone, instead of handing out its encrypted metadata until the next cleanup.
+- **web**: A download shows and saves the file under a cleaned name, so a sender can no longer disguise its type with characters that reverse the text, like an exe that shows as a pdf.
+- **web**: Downloads reach the browser as plain files that it never opens as a page of the instance, whatever type the sender named.
+
+### 🎨 Improvements
+
+- **server**: Uploads and notes are only created with auth and owner tokens of exactly 32 bytes.
+- **server**: An upload to S3 storage smaller than one part is stored with a single request, and the last part of a larger one goes out beside the parts still uploading.
+- **server**: Uploads to S3 storage reuse their connections to the bucket instead of opening a new one for every part. On a server whose DNS resolver answers several lookups at once slowly, that made uploads to Cloudflare R2 five times as fast in a test.
+- **server**: An upload over WebSocket stops as soon as writing to the storage fails, instead of after the browser sent the whole file.
+- **server**: The files of the app are served from memory in one piece, so a page behind a reverse proxy on the same host no longer waits 200 to 400 ms for each of them.
+- **web**: The download service worker passes on a MIME type only when it has the usual form.
+- **web**: Uploads over WebSocket copy less and keep the connection busy, which makes them faster in every browser and about half again as fast in Chrome.
+- **web**: The progress bar and the speed of an upload follow what really left the browser and change smoothly, instead of lagging behind and jumping at the end.
+- **web**: The speed of a download is the average of the last three seconds like for an upload, so it no longer jumps between nothing and twice the real speed when the data arrives in bursts, as it does from a bucket.
+- **web**: An upload shows that it is being processed once the browser sent everything, instead of standing at 99 % while the server still writes to the bucket.
+- **web**: The progress text and the cancel button of uploads and downloads are worded alike in English and German.
+- **web**: The download service worker only handles downloads and no longer sees every other request of the app, which also makes uploads in chunks faster.
+- **web**: Several files go up while they are packed, with no wait before the upload and without the zip in memory, which made 3 GB of files that do not compress about four times as fast in a test.
+- **web**: The technical info of a download names Brave as Brave and says why faster ways of saving were passed over, like a Service Worker stopped by a certificate error.
+- **crypto**: Decrypted metadata only accepts sizes that are whole numbers.
+- **crypto**: Encrypting and decrypting a file no longer slows down when the browser hands over the data in large pieces, which held back uploads from Chrome on Linux and downloads that are decrypted in memory.
+
+### 🔄 Changed
+
+- **server**: `S3_PART_SIZE` and `S3_CONCURRENCY` default to 8MB and 8 instead of 25MB and 4, which keeps uploads to S3 steadier and needs less memory per upload.
+- **server**: `FILE_MAX_FILES_PER_UPLOAD` defaults to 200 instead of 32.
+- **web**: The zip of several files stores them without compression, which leaves most large files the same size and lets the upload start at once.
+
+### 📝 Documentation
+
+- **docs**: The security pages now say that whoever holds a link can also delete the share through the API.
+- **docs**: The home page now leads to the main sections of the docs instead of listing every feature, and Getting Started covers notes, file requests and the current link format.
+- **docs**: The testing guide explains how to run and write the end-to-end tests.
+- **docs**: Troubleshooting explains why Chrome asks where to save every download on an instance whose certificate it does not trust.
+- **docs**: The AI transparency section of the README names the end-to-end tests among the checks behind the code.
+- **docs**: The S3 guide now explains how to set a lifecycle rule that removes incomplete multipart uploads.
+- **docs**: The rate limiting guide explains that people behind one address share one count and when to raise `RATE_LIMIT_MAX`.
+- **docs**: The S3 guide names the endpoint of a Cloudflare R2 bucket in the EU jurisdiction.
+- **docs**: The rate limiting guide says which address of `X-Forwarded-For` counts and what to do behind a CDN.
+- **docs**: The API reference lists the answers of the password check and of an unknown address under `/api` as the server gives them.
+
+### 🧪 Tests
+
+- **server**: Unit tests cover the order of the parts and the abort of S3 multipart uploads.
+- **server**: Unit tests cover the memory limit of S3 uploads and the serving of the files of the app.
+- **server**: Unit tests cover the rate limit of uploads over WebSocket, their shared memory budget and the timeout before their start.
+- **server**: Unit tests check that the content security policy allows the presigned downloads of R2, Hetzner, MinIO and AWS S3 as the AWS SDK builds them.
+- **server**: Unit tests cover metadata sent twice at once, the password check of a used-up share and the content security policy of an AWS S3 bucket.
+- **web**: Unit tests feed every block of a note the markup an attacker would try and check that nothing of it can run, load or restyle the page.
+- **web**: Unit tests read the zip of several files back with another zip reader and check its records past 4 GB.
+- **web**: Unit tests cover the check of the room in browser storage before a download goes there.
+- **web**: Unit tests check that the speed a transfer shows stays steady when its data arrives in bursts.
+- **web**: Unit tests cover how the download service worker gets its updates and which worker takes a download.
+- **web**: A unit test checks that a download page shows the size of the file and not of its ciphertext.
+- **web**: Unit tests check that a download is saved under a cleaned name as a plain file and that the download service worker forbids the browser to run what it hands over.
+- **crypto**: Frozen values pin the auth and owner token derivation, the password box key is checked to be non-extractable, and the base64url decoder is checked to refuse the standard alphabet.
+- **crypto**: Tests check the record layout of encrypted files against the format itself for every way the input can be cut into chunks.
+- **infra**: End-to-end tests share files and notes and send to file requests in Chromium, Firefox and WebKit, directly and behind Caddy and Nginx with HTTPS and HTTP/2, then open them on the other side. They check that keys, filenames, passwords and contents never reach the server and that uploads and downloads take the path they should.
+- **infra**: The Nginx example of the reverse proxy guide runs in the end-to-end tests as written, so a change that breaks it fails its pull request.
+- **infra**: The end-to-end tests also cover My Links, closing, filling and deleting file requests, request templates, expiry by time, rewritten links and links of v1, uploads in several chunks, a cancelled upload, the phone layout and the settings for forced passwords and enabled services. They also run against S3 storage, behind an OIDC login and with shares between the CLI and the browser.
+- **infra**: The end-to-end tests open the links of v3.0.1 with the current version after it migrated that release's data, so a change that breaks old links fails its pull request.
+- **infra**: An end-to-end test opens a crafted note in Chromium, Firefox and WebKit and checks the rendered page for anything that could run.
+- **infra**: A benchmark sends large files up and down through the app in Chromium, Chrome, Brave, Firefox and WebKit and records the speed of every hop and what the page shows, for one transfer or several side by side, optionally over a slower network, behind Nginx or against a real S3 bucket.
+- **infra**: End-to-end tests check that the download service worker controls no page and replaces the registration of an older release.
+- **infra**: An end-to-end test downloads a file through the browser's private storage, the way Safari now does, in Firefox with Service Workers blocked.
+- **infra**: End-to-end tests check that a folder keeps its subfolders in the zip and that names too long for the server stop an upload before it starts.
+- **infra**: An end-to-end test starts a download in Firefox after the browser stopped the idle download service worker.
+- **infra**: A test fails when a file in the repository holds an invisible character that changes how code reads, like a right-to-left override.
+- **infra**: An end-to-end test checks that an unknown address under `/api` answers with a 404 in JSON.
+
+### 🔧 CI/CD
+
+- **infra**: Pull requests run the end-to-end tests in one job per browser, each starting only the services its tests need, and keep the screenshots, videos and traces of a failed job for seven days.
+- **infra**: A job of its own sends a file of 5 GiB up through Nginx with TLS and HTTP/2 and down again in Chromium, and compares it byte for byte.
+- **infra**: A pull request into dev that changes nothing the end-to-end tests cover, like one for the website alone, skips them, and Validate can also be started by hand.
+
+### 🐳 Docker
+
+- **Image**: `skyfay/skysend:v3.1.0`
+- **Also tagged as**: `latest`, `v3`
+- **Platforms**: linux/amd64, linux/arm64
+
 ## v3.0.1 - iPhone and iPad Fixes, Steady Header and Release Tooling
 
 *Released: October 10, 2026*

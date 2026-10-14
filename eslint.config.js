@@ -9,7 +9,18 @@ export default tseslint.config(
     // The website carries its own eslint.config.mjs with the rules of
     // eslint-config-next. `pnpm lint` runs it through
     // `pnpm --filter @skysend/website lint`.
-    ignores: ["**/dist/", "**/build/", "**/coverage/", "**/.vitepress/", "website/"],
+    ignores: [
+      "**/dist/",
+      "**/build/",
+      "**/coverage/",
+      "**/.vitepress/",
+      "website/",
+      "e2e/playwright-report/",
+      "e2e/test-results/",
+      // Files of the large-file test and the benchmark, never committed.
+      "e2e/.large-files/",
+      "e2e/.tools/",
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
@@ -49,6 +60,7 @@ export default tseslint.config(
       "apps/cli/**/*.ts",
       "apps/client/**/*.{ts,tsx}",
       "scripts/**/*.{mjs,ts}",
+      "e2e/**/*.{mjs,ts}",
     ],
     languageOptions: {
       globals: {

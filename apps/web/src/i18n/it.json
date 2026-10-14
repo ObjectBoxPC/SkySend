@@ -90,7 +90,6 @@
     "uploading": "Crittografia e caricamento...",
     "encryptingProgress": "Crittografia...",
     "processing": "Elaborazione...",
-    "packing": "Preparazione dei file...",
     "uploadComplete": "Caricamento completato!",
     "shareLink": "Condividi questo link",
     "shareLinkHint": "La chiave di crittografia è nel frammento dell'URL - non raggiunge mai il server.",
@@ -99,6 +98,7 @@
     "newUpload": "Nuovo caricamento",
     "fileTooLarge": "Il file supera la dimensione massima di {{size}}",
     "tooManyFiles": "Massimo {{count}} file per caricamento",
+    "fileListTooLong": "I nomi di questi file sono troppo lunghi nel complesso per un solo caricamento. Scegli meno file o nomi più brevi.",
     "fileNotReadable": "Il file selezionato non può essere letto. Selezionalo di nuovo e riprova."
   },
   "download": {
@@ -294,6 +294,8 @@
     "tierSw": "Stream SW",
     "tierFilePicker": "Selettore salvataggio",
     "tierBlob": "Blob",
+    "tierOpfs": "Archivio del browser (OPFS)",
+    "tierOpfsShort": "OPFS",
     "transportWs": "WebSocket",
     "transportHttp": "Blocchi HTTP",
     "swPathStream": "ReadableStream",

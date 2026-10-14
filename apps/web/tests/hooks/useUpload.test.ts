@@ -38,7 +38,9 @@ vi.mock("../../src/lib/upload-store.js", () => ({
   saveUpload: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("@skysend/crypto", () => ({
+// The real size check of the metadata, fixed random bytes.
+vi.mock("@skysend/crypto", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@skysend/crypto")>()),
   generateSecret: vi.fn(() => new Uint8Array(32).fill(1)),
   generateSalt: vi.fn(() => new Uint8Array(32).fill(2)),
 }));
@@ -361,7 +363,7 @@ describe("useUpload", () => {
     expect(result.current.error).toBe("fileNotReadable");
   });
 
-  it("Multi-File-Upload (2 Dateien) → Startphase='zipping'", async () => {
+  it("starts an upload of several files at once, the zip written while it uploads", async () => {
     const { useUpload } = await import("../../src/hooks/useUpload.js");
     const { result } = renderHook(() => useUpload());
 
@@ -375,7 +377,32 @@ describe("useUpload", () => {
     });
 
     await waitFor(() => expect(MockWorker.lastInstance).not.toBeNull());
-    expect(result.current.phase).toBe("zipping");
+    expect(result.current.phase).toBe("uploading");
+    const sent = MockWorker.lastInstance!.postMessage.mock.calls[0]![0] as {
+      metadata: { type: string; files: unknown[]; archiveSize: number };
+    };
+    expect(sent.metadata.type).toBe("archive");
+    expect(sent.metadata.files).toHaveLength(2);
+    expect(sent.metadata.archiveSize).toBeGreaterThan(0);
+    expect(
+      result.current.debugInfo?.events.some(
+        (e) => e.message === "Zip of 2 files, written while uploading",
+      ),
+    ).toBe(true);
+  });
+
+  it("stops before the worker when the names are too long together for the server", async () => {
+    const { useUpload } = await import("../../src/hooks/useUpload.js");
+    const { result } = renderHook(() => useUpload());
+    const files = Array.from({ length: 200 }, (_, i) => makeFile(`${i}-${"日".repeat(250)}`));
+
+    await act(async () => {
+      await result.current.upload({ files, maxDownloads: 1, expireSec: 3600, password: "" });
+    });
+
+    expect(result.current.phase).toBe("error");
+    expect(result.current.error).toBe("fileListTooLong");
+    expect(MockWorker.lastInstance).toBeNull();
   });
 
   it("Worker 'phase'-Message → Zustandswechsel zu 'uploading'", async () => {
@@ -597,61 +624,6 @@ describe("useUpload", () => {
 
     expect(result.current.phase).toBe("error");
     expect(result.current.error).toBe("Upload failed");
-  });
-
-  it("Worker 'phase'-Message 'zipping' → debugInfo enthält 'Packing started'", async () => {
-    const { useUpload } = await import("../../src/hooks/useUpload.js");
-    const { result } = renderHook(() => useUpload());
-
-    act(() => {
-      result.current.upload({ files: [makeFile()], maxDownloads: 1, expireSec: 3600, password: "" });
-    });
-    await waitFor(() => expect(MockWorker.lastInstance).not.toBeNull());
-
-    const worker = MockWorker.lastInstance!;
-    act(() => {
-      worker.emit({ type: "phase", phase: "zipping" });
-    });
-
-    expect(result.current.phase).toBe("zipping");
-    expect(result.current.debugInfo?.events.some((e) => e.message === "Packing started")).toBe(true);
-  });
-
-  it("Worker 'pack-done' mit durationMs > 0 → debugInfo enthält Packing-Speed", async () => {
-    const { useUpload } = await import("../../src/hooks/useUpload.js");
-    const { result } = renderHook(() => useUpload());
-
-    act(() => {
-      result.current.upload({ files: [makeFile()], maxDownloads: 1, expireSec: 3600, password: "" });
-    });
-    await waitFor(() => expect(MockWorker.lastInstance).not.toBeNull());
-
-    const worker = MockWorker.lastInstance!;
-    act(() => {
-      worker.emit({ type: "pack-done", durationMs: 1000, inputBytes: 5000 });
-    });
-
-    const packed = result.current.debugInfo?.events.find((e) => e.message === "Packing complete");
-    expect(packed?.detail).toMatch(/^Ø .+\/s$/);
-  });
-
-  it("Worker 'pack-done' mit durationMs = 0 → debugInfo enthält 'Packing complete' ohne Speed", async () => {
-    const { useUpload } = await import("../../src/hooks/useUpload.js");
-    const { result } = renderHook(() => useUpload());
-
-    act(() => {
-      result.current.upload({ files: [makeFile()], maxDownloads: 1, expireSec: 3600, password: "" });
-    });
-    await waitFor(() => expect(MockWorker.lastInstance).not.toBeNull());
-
-    const worker = MockWorker.lastInstance!;
-    act(() => {
-      worker.emit({ type: "pack-done", durationMs: 0, inputBytes: 0 });
-    });
-
-    const packed = result.current.debugInfo?.events.find((e) => e.message === "Packing complete");
-    expect(packed).toBeDefined();
-    expect(packed?.detail).toBeUndefined();
   });
 
   it("Worker 'storage' mit backend='s3' → debugInfo enthält 'S3 upload active'", async () => {

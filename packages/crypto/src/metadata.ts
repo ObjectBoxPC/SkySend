@@ -26,6 +26,27 @@ export const META_IV_LENGTH = 12;
 export const METADATA_PAD_BLOCK = 1024;
 
 /**
+ * The most bytes of encrypted metadata the server takes, the tag included, for a normal upload
+ * and an upload into a file request alike. Base64 makes 100,000 characters of it.
+ */
+export const MAX_ENCRYPTED_METADATA_BYTES = 75_000;
+
+/** The AES-GCM tag after the padded JSON. */
+const META_TAG_LENGTH = 16;
+
+function paddedLength(json: Uint8Array): number {
+  return Math.max(1, Math.ceil(json.length / METADATA_PAD_BLOCK)) * METADATA_PAD_BLOCK;
+}
+
+/**
+ * Whether a value is a byte count: a non-negative safe integer. JSON reads 1e999 as Infinity
+ * and 1.5 as a float, and a hand-built blob can carry either.
+ */
+function isByteCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+/**
  * Marks the uploads a sender of a file request sent together, files and a note. 32 hex
  * characters, random per send. Every upload into a request carries one, so the metadata of a
  * note sent alone is as long as the one of a note sent with files.
@@ -100,13 +121,12 @@ export async function encryptMetadata(
   metaKey: CryptoKey,
 ): Promise<EncryptedMetadata> {
   const json = new TextEncoder().encode(JSON.stringify(metadata));
-  const padded = Math.max(1, Math.ceil(json.length / METADATA_PAD_BLOCK)) * METADATA_PAD_BLOCK;
-  const plaintext = new Uint8Array(padded).fill(0x20);
+  const plaintext = new Uint8Array(paddedLength(json)).fill(0x20);
   plaintext.set(json);
   const iv = randomBytes(META_IV_LENGTH);
 
   const ciphertext = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv: asBytes(iv), tagLength: 128 },
+    { name: "AES-GCM", iv: asBytes(iv), tagLength: META_TAG_LENGTH * 8 },
     metaKey,
     asBytes(plaintext),
   );
@@ -115,6 +135,15 @@ export async function encryptMetadata(
     ciphertext: new Uint8Array(ciphertext),
     iv,
   };
+}
+
+/**
+ * The length of the ciphertext encryptMetadata makes of this metadata. A client checks it
+ * against MAX_ENCRYPTED_METADATA_BYTES before an upload, since the server only gets the
+ * metadata once the file is up.
+ */
+export function encryptedMetadataLength(metadata: RequestUploadMetadata): number {
+  return paddedLength(new TextEncoder().encode(JSON.stringify(metadata))) + META_TAG_LENGTH;
 }
 
 /**
@@ -146,7 +175,7 @@ export async function decryptRequestMetadata(
   const data = await decryptJson(ciphertext, iv, metaKey);
   if (typeof data === "object" && data !== null && (data as { type?: unknown }).type === "note") {
     const { size } = data as { size?: unknown };
-    if (typeof size !== "number" || !Number.isSafeInteger(size) || size < 0) {
+    if (!isByteCount(size)) {
       throw new Error("Invalid metadata: invalid note size");
     }
     return { type: "note", size, ...submissionOf(data as Record<string, unknown>) };
@@ -208,7 +237,7 @@ function validateMetadata(data: unknown): FileMetadata {
     if (typeof obj.name !== "string" || obj.name.length === 0) {
       throw new Error("Invalid metadata: missing or empty file name");
     }
-    if (typeof obj.size !== "number" || obj.size < 0) {
+    if (!isByteCount(obj.size)) {
       throw new Error("Invalid metadata: invalid file size");
     }
     if (typeof obj.mimeType !== "string") {
@@ -236,20 +265,15 @@ function validateMetadata(data: unknown): FileMetadata {
       if (typeof f.name !== "string" || f.name.length === 0) {
         throw new Error("Invalid metadata: file entry missing name");
       }
-      if (typeof f.size !== "number" || f.size < 0) {
+      if (!isByteCount(f.size)) {
         throw new Error("Invalid metadata: file entry invalid size");
       }
       files.push({ name: f.name, size: f.size });
     }
-    if (typeof obj.totalSize !== "number" || obj.totalSize < 0) {
+    if (!isByteCount(obj.totalSize)) {
       throw new Error("Invalid metadata: invalid total size");
     }
-    if (
-      obj.archiveSize !== undefined &&
-      (typeof obj.archiveSize !== "number" ||
-        !Number.isSafeInteger(obj.archiveSize) ||
-        obj.archiveSize < 0)
-    ) {
+    if (obj.archiveSize !== undefined && !isByteCount(obj.archiveSize)) {
       throw new Error("Invalid metadata: invalid archive size");
     }
     return {

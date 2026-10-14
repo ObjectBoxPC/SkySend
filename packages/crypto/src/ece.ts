@@ -56,38 +56,55 @@ export function createEncryptStream(
   fileKey: CryptoKey,
 ): TransformStream<Uint8Array, Uint8Array> {
   const baseNonce = randomBytes(NONCE_LENGTH);
-  let buffer: AnyBytes = new Uint8Array(0);
+  // The start of a record that the chunks so far did not fill. Whole records are encrypted
+  // straight from the chunk they arrive in, so only this rest is ever copied. Copying the
+  // remainder of every chunk once per record instead cost time quadratic in the chunk size,
+  // and Chromium reads files in chunks of up to 2 MiB.
+  const pending = new Uint8Array(RECORD_SIZE);
+  let pendingLength = 0;
   let counter = 0;
   let headerSent = false;
 
   return new TransformStream<Uint8Array, Uint8Array>({
     async transform(chunk, controller) {
-      // Emit the nonce header before any encrypted data
+      // Emit a copy of the nonce header before any encrypted data. The record nonces keep
+      // coming from the stream's own array, whatever a consumer does with the chunk.
       if (!headerSent) {
-        controller.enqueue(baseNonce);
+        controller.enqueue(baseNonce.slice());
         headerSent = true;
       }
 
-      // Append incoming data to buffer
-      buffer = appendToBuffer(buffer, chunk);
-
-      // Process all complete records
-      while (buffer.length >= RECORD_SIZE) {
-        const record = buffer.slice(0, RECORD_SIZE);
-        buffer = buffer.slice(RECORD_SIZE);
-        await encryptAndEnqueue(record, fileKey, baseNonce, counter++, controller);
+      let offset = 0;
+      if (pendingLength > 0) {
+        offset = Math.min(RECORD_SIZE - pendingLength, chunk.length);
+        pending.set(chunk.subarray(0, offset), pendingLength);
+        pendingLength += offset;
+        if (pendingLength < RECORD_SIZE) return;
+        await encryptAndEnqueue(pending, fileKey, baseNonce, counter++, controller);
+        pendingLength = 0;
       }
+
+      while (chunk.length - offset >= RECORD_SIZE) {
+        const record = chunk.subarray(offset, offset + RECORD_SIZE);
+        await encryptAndEnqueue(record, fileKey, baseNonce, counter++, controller);
+        offset += RECORD_SIZE;
+      }
+
+      // Copied, so the stream holds no chunk of its producer once transform returns.
+      pending.set(chunk.subarray(offset), 0);
+      pendingLength = chunk.length - offset;
     },
 
     async flush(controller) {
       // Emit header even for empty input (edge case)
       if (!headerSent) {
-        controller.enqueue(baseNonce);
+        controller.enqueue(baseNonce.slice());
       }
 
       // Encrypt any remaining data as the final (potentially smaller) record
-      if (buffer.length > 0) {
-        await encryptAndEnqueue(buffer, fileKey, baseNonce, counter++, controller);
+      if (pendingLength > 0) {
+        const record = pending.subarray(0, pendingLength);
+        await encryptAndEnqueue(record, fileKey, baseNonce, counter++, controller);
       }
     },
   });
@@ -112,41 +129,55 @@ export function createDecryptStream(
   expectedPlaintextSize?: number,
 ): TransformStream<Uint8Array, Uint8Array> {
   let baseNonce: AnyBytes | null = null;
-  let buffer: AnyBytes = new Uint8Array(0);
+  const nonce = new Uint8Array(NONCE_LENGTH);
+  let nonceLength = 0;
+  // At most one record, waiting for the byte after it or for the end of the stream, the same
+  // way createEncryptStream keeps the start of a record. Whole records are decrypted straight
+  // from the chunk they arrive in, so a download that arrives in pieces of many MiB costs no
+  // more than one in pieces of 64 KiB.
+  const pending = new Uint8Array(ENCRYPTED_RECORD_SIZE);
+  let pendingLength = 0;
   let counter = 0;
-  let nonceBuffer: AnyBytes = new Uint8Array(0);
   let totalDecrypted = 0;
 
   return new TransformStream<Uint8Array, Uint8Array>({
     async transform(chunk, controller) {
+      let offset = 0;
+
       // Phase 1: Read the nonce header
       if (baseNonce === null) {
-        nonceBuffer = appendToBuffer(nonceBuffer, chunk);
-        if (nonceBuffer.length < NONCE_LENGTH) {
+        offset = Math.min(NONCE_LENGTH - nonceLength, chunk.length);
+        nonce.set(chunk.subarray(0, offset), nonceLength);
+        nonceLength += offset;
+        if (nonceLength < NONCE_LENGTH) {
           return; // Need more data for nonce
         }
-        baseNonce = nonceBuffer.slice(0, NONCE_LENGTH);
-        // Remaining bytes after nonce go into the record buffer
-        const remaining = nonceBuffer.slice(NONCE_LENGTH);
-        nonceBuffer = new Uint8Array(0); // Free memory
-        if (remaining.length === 0) return;
-        chunk = remaining;
+        baseNonce = nonce;
       }
 
-      // Phase 2: Buffer and process encrypted records
-      buffer = appendToBuffer(buffer, chunk);
+      // Phase 2: Process encrypted records. A record is only decrypted once at least one byte
+      // follows it, so the last one is always left for flush, which also checks what remains.
+      if (pendingLength > 0) {
+        const take = Math.min(ENCRYPTED_RECORD_SIZE - pendingLength, chunk.length - offset);
+        pending.set(chunk.subarray(offset, offset + take), pendingLength);
+        pendingLength += take;
+        offset += take;
+        if (pendingLength < ENCRYPTED_RECORD_SIZE || offset === chunk.length) return;
+        totalDecrypted += RECORD_SIZE;
+        await decryptAndEnqueue(pending, fileKey, baseNonce, counter++, controller);
+        pendingLength = 0;
+      }
 
-      // Process all complete records. We keep at least one byte beyond
-      // ENCRYPTED_RECORD_SIZE in the buffer before processing, because
-      // we need to know if this is the last record (for proper GCM handling).
-      // However, since GCM doesn't need special last-record treatment
-      // in our design, we process all complete records immediately.
-      while (buffer.length > ENCRYPTED_RECORD_SIZE) {
-        const record = buffer.slice(0, ENCRYPTED_RECORD_SIZE);
-        buffer = buffer.slice(ENCRYPTED_RECORD_SIZE);
+      while (chunk.length - offset > ENCRYPTED_RECORD_SIZE) {
+        const record = chunk.subarray(offset, offset + ENCRYPTED_RECORD_SIZE);
         totalDecrypted += RECORD_SIZE;
         await decryptAndEnqueue(record, fileKey, baseNonce, counter++, controller);
+        offset += ENCRYPTED_RECORD_SIZE;
       }
+
+      // Copied, so the stream holds no chunk of its producer once transform returns.
+      pending.set(chunk.subarray(offset), 0);
+      pendingLength = chunk.length - offset;
     },
 
     async flush(controller) {
@@ -155,12 +186,13 @@ export function createDecryptStream(
       }
 
       // Process the final record (may be smaller than ENCRYPTED_RECORD_SIZE)
-      if (buffer.length > 0) {
-        if (buffer.length <= TAG_LENGTH) {
+      if (pendingLength > 0) {
+        if (pendingLength <= TAG_LENGTH) {
           throw new Error("Invalid encrypted record: too short to contain auth tag");
         }
-        totalDecrypted += buffer.length - TAG_LENGTH;
-        await decryptAndEnqueue(buffer, fileKey, baseNonce, counter++, controller);
+        totalDecrypted += pendingLength - TAG_LENGTH;
+        const record = pending.subarray(0, pendingLength);
+        await decryptAndEnqueue(record, fileKey, baseNonce, counter++, controller);
       }
 
       // Truncation check: verify the decrypted size matches the expected plaintext size.
@@ -224,15 +256,6 @@ async function decryptAndEnqueue(
   } catch {
     throw new Error("Decryption failed - data may be corrupted or tampered with");
   }
-}
-
-/** Append new data to an existing buffer. */
-function appendToBuffer(existing: AnyBytes, newData: AnyBytes): AnyBytes {
-  if (existing.length === 0) return newData;
-  const combined = new Uint8Array(existing.length + newData.length);
-  combined.set(existing, 0);
-  combined.set(newData, existing.length);
-  return combined;
 }
 
 /**

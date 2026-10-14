@@ -1,16 +1,18 @@
 import { useState, useCallback, useRef } from "react";
 import {
+  encryptedMetadataLength,
   generateSecret,
   generateSalt,
+  MAX_ENCRYPTED_METADATA_BYTES,
   type RequestUploadMetadata,
 } from "@skysend/crypto";
+import { archiveMetadata } from "@/lib/archive";
 import { saveUpload } from "@/lib/upload-store";
 import type { UploadWorkerMessage } from "@/lib/upload-worker";
 import { formatBytes, getBrowserInfo } from "@/lib/utils";
 
 export type UploadPhase =
   | "idle"
-  | "zipping"
   | "uploading"
   | "saving-meta"
   | "done"
@@ -198,26 +200,30 @@ export function useUpload() {
         };
         fileNames.push(file.name);
       } else {
-        metadata = {
-          type: "archive",
-          files: files.map((f) => ({
-            name: f.webkitRelativePath || f.name,
-            size: f.size,
-          })),
-          totalSize: files.reduce((sum, f) => sum + f.size, 0),
-        };
-        for (const f of files) {
-          fileNames.push(f.webkitRelativePath || f.name);
-        }
+        metadata = archiveMetadata(files);
+        fileNames.push(...metadata.files.map((f) => f.name));
       }
 
       if (submission) metadata = { ...metadata, submission };
+      // The server takes the metadata only after the upload, so a list of names too long for it
+      // has to stop the upload before it starts. The pages check the same with archiveMetadataFits.
+      if (encryptedMetadataLength(metadata) > MAX_ENCRYPTED_METADATA_BYTES) {
+        throw new Error("fileListTooLong");
+      }
+      const archive =
+        metadata.type === "archive"
+          ? {
+              time: new Date().toISOString(),
+              message: `Zip of ${files.length} files, written while uploading`,
+              detail: formatBytes(metadata.archiveSize ?? 0),
+            }
+          : null;
 
-      // Spawn upload worker - zipping (if multi-file), encryption + upload
-      // all run off the main thread.
+      // Spawn upload worker - zip (if multi-file), encryption + upload all run off the main
+      // thread, in one pass over the files.
       setState((s) => ({
         ...s,
-        phase: files.length > 1 ? "zipping" : "uploading",
+        phase: "uploading",
         progress: 0,
         speed: null,
         debugInfo: {
@@ -225,7 +231,10 @@ export function useUpload() {
           fallback: false,
           storage: null,
           browser: getBrowserInfo(),
-          events: continues && s.debugInfo ? s.debugInfo.events : [],
+          events: [
+            ...(continues && s.debugInfo ? s.debugInfo.events : []),
+            ...(archive ? [archive] : []),
+          ],
         },
       }));
 
@@ -241,8 +250,10 @@ export function useUpload() {
         salt.buffer as ArrayBuffer,
       ];
 
-      // Speed calculation state
-      let lastLoaded = 0;
+      // Speed calculation state. The speed is the average over the last SPEED_WINDOW_MS,
+      // shown anew every 500 ms, so a short stall or burst does not throw the number around.
+      const SPEED_WINDOW_MS = 3000;
+      let speedSamples: Array<{ time: number; loaded: number }> = [];
       let lastTime = performance.now();
       let uploadStartTime = 0;
       let uploadTotalBytes = 0;
@@ -260,36 +271,31 @@ export function useUpload() {
           switch (msg.type) {
             case "phase":
               // Reset speed tracking on phase change
-              lastLoaded = 0;
+              speedSamples = [];
               lastTime = performance.now();
               if (msg.phase === "uploading") {
                 uploadStartTime = performance.now();
               }
-              if (msg.phase === "zipping") {
-                setState((s) => ({
-                  ...s,
-                  phase: msg.phase as UploadPhase,
-                  progress: 0,
-                  speed: null,
-                  /* v8 ignore next */
-                  debugInfo: s.debugInfo
-                    ? { ...s.debugInfo, events: [...s.debugInfo.events, { time: new Date().toISOString(), message: "Packing started" }] }
-                    /* v8 ignore next */
-                    : null,
-                }));
-              } else {
-                setState((s) => ({ ...s, phase: msg.phase as UploadPhase, progress: 0, speed: null }));
-              }
+              setState((s) => ({
+                ...s,
+                phase: msg.phase as UploadPhase,
+                progress: 0,
+                speed: null,
+              }));
               break;
             case "progress": {
               const now = performance.now();
-              const elapsed = (now - lastTime) / 1000;
+              if (speedSamples.length === 0) speedSamples.push({ time: lastTime, loaded: 0 });
+              speedSamples.push({ time: now, loaded: msg.loaded });
+              while (speedSamples.length > 2 && now - speedSamples[1]!.time >= SPEED_WINDOW_MS) {
+                speedSamples.shift();
+              }
               let speed: string | null = null;
               // Update speed every 500ms to avoid flickering
-              if (elapsed >= 0.5) {
-                const bytesPerSec = (msg.loaded - lastLoaded) / elapsed;
+              if (now - lastTime >= 500) {
+                const oldest = speedSamples[0]!;
+                const bytesPerSec = (msg.loaded - oldest.loaded) / ((now - oldest.time) / 1000);
                 speed = `${formatBytes(bytesPerSec)}/s`;
-                lastLoaded = msg.loaded;
                 lastTime = now;
               }
               setState((s) => ({
@@ -301,25 +307,6 @@ export function useUpload() {
                 ...(speed ? { speed } : {}),
               }));
               uploadTotalBytes = msg.total;
-              break;
-            }
-            case "pack-done": {
-              const avgPackSpeed = msg.durationMs > 0
-                ? `${formatBytes(Math.round(msg.inputBytes / (msg.durationMs / 1000)))}/s`
-                : null;
-              const packEvent = {
-                time: new Date().toISOString(),
-                message: "Packing complete",
-                ...(avgPackSpeed ? { detail: `\u00d8 ${avgPackSpeed}` } : {}),
-              };
-              setState((s) => ({
-                ...s,
-                /* v8 ignore next */
-                debugInfo: s.debugInfo
-                  ? { ...s.debugInfo, events: [...s.debugInfo.events, packEvent] }
-                  /* v8 ignore next */
-                  : null,
-              }));
               break;
             }
             case "done":

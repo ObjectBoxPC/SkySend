@@ -36,6 +36,7 @@ import { useServerConfig } from "@/hooks/useServerConfig";
 import { NotFoundPage } from "@/pages/NotFound";
 import { hashWasmArgon2 } from "@/lib/argon2";
 import { copyText } from "@/lib/clipboard";
+import { opfsFits } from "@/lib/opfs-file";
 import {
   groupBySubmission,
   NoteTooLargeError,
@@ -206,11 +207,12 @@ export function InboxPage() {
     }
   };
 
-  const requestDownload = (entry: OpenedUpload) => {
+  const requestDownload = async (entry: OpenedUpload) => {
     // A note opens in this page, so no saving tier or browser warning is involved.
     if (entry.file?.metadata.type === "note") return void openNote(entry);
     if (isFirefox() && isDevToolsOpen()) return setPending({ entry, reason: "devtools" });
-    if (isSafari() && entry.upload.size > SAFARI_BIG_SIZE)
+    // Safari only warns where the file cannot go to disk through OPFS.
+    if (isSafari() && entry.upload.size > SAFARI_BIG_SIZE && !(await opfsFits(entry.upload.size)))
       return setPending({ entry, reason: "safari" });
     void startDownload(entry);
   };
@@ -223,7 +225,7 @@ export function InboxPage() {
       asks={opened.asks}
       busy={openingNote !== null}
       progress={inbox.downloads[entry.upload.id]}
-      onDownload={() => requestDownload(entry)}
+      onDownload={() => void requestDownload(entry)}
       onCancel={() => inbox.cancelDownload(entry.upload.id)}
       onDelete={() => ask({ kind: "file", entry })}
     />

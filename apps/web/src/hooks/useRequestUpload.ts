@@ -42,7 +42,7 @@ function isGone(err: unknown): boolean {
   return err instanceof api.ApiError && (err.status === 404 || err.status === 403);
 }
 
-const BUSY: UploadPhase[] = ["zipping", "uploading", "saving-meta"];
+const BUSY: UploadPhase[] = ["uploading", "saving-meta"];
 
 /** A random submission ID, 16 bytes as hex. */
 function newSubmission(): string {

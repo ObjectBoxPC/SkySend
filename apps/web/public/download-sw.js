@@ -81,25 +81,53 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(self.clients.claim());
 });
 
+/** @type {Map<string, () => void>} Ends the wait of a config for its download to arrive. */
+const arrivals = new Map();
+/** @type {Set<string>} Downloads that arrived, so a late copy of their config is not kept. */
+const arrived = new Set();
+
+/** Keeps a config until its download arrives, and answers that it has it. */
+function takeConfig(msg) {
+  if (pending.has(msg.id) || arrived.has(msg.id)) return;
+  pending.set(msg.id, {
+    url: msg.url,
+    authToken: msg.authToken,
+    // Only the two headers the API knows. A file in a request inbox uses its own.
+    tokenHeader: msg.tokenHeader === "X-Inbox-Token" ? "X-Inbox-Token" : "X-Auth-Token",
+    secret: msg.secret,
+    salt: msg.salt,
+    filename: msg.filename,
+    mimeType: msg.mimeType,
+    size: msg.size || 0,
+    // From the authenticated metadata. Null only for archives uploaded by older
+    // clients, which carry no archive size.
+    plaintextSize: typeof msg.plaintextSize === "number" ? msg.plaintextSize : null,
+  });
+  bc.postMessage({ type: "config-ok", id: msg.id });
+}
+
+// The page sends a config as a message to this worker, which starts it when the browser
+// stopped it after half a minute without work. A BroadcastChannel message does not, so a
+// download that began after the page sat open for a while used to fall back to a slower tier.
+// The worker stays up until the download it was given arrives, a minute at the most.
+self.addEventListener("message", (event) => {
+  const msg = event.data || {};
+  if (msg.type !== "config" || !msg.id) return;
+  takeConfig(msg);
+  if (arrived.has(msg.id)) return;
+  event.waitUntil(
+    new Promise((resolve) => {
+      arrivals.set(msg.id, resolve);
+      setTimeout(resolve, 60_000);
+    }),
+  );
+});
+
+// The same config comes over the BroadcastChannel too, for a worker of an older release that
+// is still active, and so does the cancel of a download that is running.
 bc.onmessage = (event) => {
   const msg = event.data || {};
-  if (msg.type === "config" && msg.id) {
-    pending.set(msg.id, {
-      url: msg.url,
-      authToken: msg.authToken,
-      // Only the two headers the API knows. A file in a request inbox uses its own.
-      tokenHeader: msg.tokenHeader === "X-Inbox-Token" ? "X-Inbox-Token" : "X-Auth-Token",
-      secret: msg.secret,
-      salt: msg.salt,
-      filename: msg.filename,
-      mimeType: msg.mimeType,
-      size: msg.size || 0,
-      // From the authenticated metadata. Null only for archives uploaded by older
-      // clients, which carry no archive size.
-      plaintextSize: typeof msg.plaintextSize === "number" ? msg.plaintextSize : null,
-    });
-    bc.postMessage({ type: "config-ok", id: msg.id });
-  }
+  if (msg.type === "config" && msg.id) takeConfig(msg);
   if (msg.type === "cancel" && msg.id) {
     pendingCancels.get(msg.id)?.();
   }
@@ -116,6 +144,9 @@ self.addEventListener("fetch", (event) => {
   const config = pending.get(id);
   if (!config) return;
   pending.delete(id);
+  arrived.add(id);
+  arrivals.get(id)?.();
+  arrivals.delete(id);
 
   // Wrap handleDownload so we can track when the stream finishes.
   // respondWith() resolves once the Response object is returned (headers only),
@@ -197,9 +228,12 @@ async function handleDownload(config, downloadId, streamDone) {
   // encodeURIComponent would throw on falls back to a plain one here, after the
   // download was already counted, instead of failing the whole tier.
   const headers = new Headers({
-    "Content-Type": /^[\w.+-]+\/[\w.+-]+$/.test(mimeType || "") ? mimeType : "application/octet-stream",
+    "Content-Type": /^[a-z][\w.+-]*\/[\w.+-]+$/i.test(mimeType || "") ? mimeType : "application/octet-stream",
     // The type is the uploader's word, so the browser must not guess a more dangerous one.
     "X-Content-Type-Options": "nosniff",
+    // A response built here carries no CSP of the server. Should a browser ever show it
+    // instead of saving it, nothing in it may run or load.
+    "Content-Security-Policy": "default-src 'none'; sandbox",
   });
 
   // Content-Length of the DECRYPTED output. Critical for Safari:

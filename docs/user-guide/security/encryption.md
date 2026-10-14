@@ -14,7 +14,7 @@ Browser (Client)                              Server
    - fileKey   (AES-256-GCM)
    - metaKey   (AES-256-GCM)
    - authKey   (HMAC-SHA256)
-3. If multi-file: Zip via fflate
+3. If multi-file: zip, written while uploading
 4. Chunked encryption (64KB records)
 5. Encrypt metadata (names, sizes)
 6. Optional: Password via Argon2id
@@ -61,6 +61,8 @@ Two tokens are derived for server-side authorization:
 - **ownerToken** = HKDF(secret, salt, "skysend-owner-token") - required for deletion and metadata upload
 
 Both tokens are sent to the server during upload. The server stores them for later verification using constant-time comparison.
+
+The owner token is derived from the secret in the link, so whoever has the link can also delete the share through the API, with or without its password. The web interface offers deletion only to the browser that created the share.
 
 ## Streaming Encryption (ECE)
 

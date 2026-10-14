@@ -90,7 +90,6 @@
     "uploading": "Krypterar och laddar upp...",
     "encryptingProgress": "Krypterar...",
     "processing": "Bearbetar...",
-    "packing": "Packar filer...",
     "uploadComplete": "Uppladdning klar!",
     "shareLink": "Dela denna länk",
     "shareLinkHint": "Krypteringsnyckeln finns i URL-fragmentet - den når aldrig servern.",
@@ -99,6 +98,7 @@
     "newUpload": "Ny uppladdning",
     "fileTooLarge": "Filen överskrider maxstorleken på {{size}}",
     "tooManyFiles": "Maximalt {{count}} filer per uppladdning",
+    "fileListTooLong": "Namnen på de här filerna är tillsammans för långa för en uppladdning. Välj färre filer eller kortare namn.",
     "fileNotReadable": "Den valda filen kunde inte läsas. Välj den igen och försök på nytt."
   },
   "download": {
@@ -294,6 +294,8 @@
     "tierSw": "SW-ström",
     "tierFilePicker": "Spara-dialog",
     "tierBlob": "Blob",
+    "tierOpfs": "Webbläsarlagring (OPFS)",
+    "tierOpfsShort": "OPFS",
     "transportWs": "WebSocket",
     "transportHttp": "HTTP-block",
     "swPathStream": "ReadableStream",

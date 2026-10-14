@@ -203,6 +203,8 @@ Primary upload transport.  Streams the encrypted payload over a single persisten
 
 Controlled by the `FILE_UPLOAD_WS` environment variable (default `true`). When disabled, or when the WebSocket handshake fails for any reason, clients automatically fall back to the HTTP chunked upload flow described above.
 
+The upgrade request counts against the global rate limit like `POST /api/upload/init`, since it opens an upload session too, and answers `429` when the limit is used up. All WebSocket uploads together buffer at most `FILE_UPLOAD_WS_MEMORY_LIMIT`. Above it the server pauses reading the socket of a session until writes free room, which a client sees as backpressure. A connection that sends no `init` within 30 seconds is closed with `1008`.
+
 ### Protocol
 
 1. **Client** opens `wss://<host>/api/upload/ws`.
@@ -231,7 +233,7 @@ Errors are reported as `{"type":"error","message":"…"}` followed by a non-1000
 | --- | --- |
 | `1002` | Protocol violation (e.g. binary frame after finalize) |
 | `1003` | Unsupported data type (e.g. non-JSON control frame) |
-| `1008` | Header validation, size mismatch, or quota violation |
+| `1008` | Header validation, size mismatch, quota violation, or no `init` within 30 seconds |
 | `1009` | Server receive buffer exceeded `FILE_UPLOAD_WS_MAX_BUFFER`, or a single message is larger than 1 MiB |
 | `1011` | Internal server error |
 

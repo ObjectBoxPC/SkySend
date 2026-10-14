@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
-import { createRateLimiter, getClientIp, toLimitKey } from "../src/middleware/rate-limit.js";
+import {
+  createRateLimiter,
+  getClientIp,
+  skipsRateLimit,
+  toLimitKey,
+} from "../src/middleware/rate-limit.js";
 import type { Config } from "../src/lib/config.js";
 
 function makeConfig(overrides: Partial<Config> = {}): Config {
@@ -103,6 +108,22 @@ describe("rate limiter", () => {
       headers: { "X-Forwarded-For": "5.6.7.8" },
     });
     expect(resB.status).toBe(200);
+  });
+});
+
+describe("skipsRateLimit", () => {
+  it("lets only the chunks of a chunked upload pass uncounted", () => {
+    expect(skipsRateLimit("/api/upload/6f1c2a7e-3b4d-4e5f-8a9b-0c1d2e3f4a5b/chunk")).toBe(true);
+    expect(skipsRateLimit("/api/request/r/upload/u/chunk")).toBe(true);
+  });
+
+  it("counts every request that opens an upload, a WebSocket upgrade included", () => {
+    // GHSA-rmc2-p8pp-4vmh: the upgrade opens a session like the init of a chunked upload.
+    expect(skipsRateLimit("/api/upload/ws")).toBe(false);
+    expect(skipsRateLimit("/api/request/6f1c2a7e-3b4d-4e5f-8a9b-0c1d2e3f4a5b/upload/ws")).toBe(false);
+    expect(skipsRateLimit("/api/upload/init")).toBe(false);
+    expect(skipsRateLimit("/api/request/r/upload/init")).toBe(false);
+    expect(skipsRateLimit("/api/upload/u/chunk/more")).toBe(false);
   });
 });
 

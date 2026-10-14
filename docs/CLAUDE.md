@@ -28,6 +28,7 @@ Two sidebars, defined in `.vitepress/config.mts`. A new page must be added there
 - **Verify every claim against the code.** Config fields, defaults, headers, and status codes must match `apps/server/src/lib/config.ts` and the route that implements them. Do not document a field that does not exist, and do not leave one documented after it is removed.
 - **One source of truth.** Link instead of repeating. The environment variable reference is the canonical list, other pages link into its anchors.
 - **Do not document external products.** Link to the official docs for AWS IAM, Cloudflare R2, Keycloak, or Nginx rather than explaining them.
+- **The Nginx example is executed.** `e2e/scripts/nginx.mjs` runs the `nginx` block of `user-guide/self-hosting/reverse-proxy.md` in the end-to-end tests, replacing only `listen 443 ssl http2;`, the two certificate lines and `proxy_pass http://localhost:3000;`, and dropping the port 80 redirect block. Reword those lines and the patterns in that script have to follow, everything else in the block is tested as written.
 - **Anchors are contracts.** `apps/web/src/lib/toast.tsx` links directly at troubleshooting anchors. Renaming such a heading breaks a link that ships inside the app, so update both together.
 - **Screenshots are optional.** Only when a UI flow is genuinely confusing.
 

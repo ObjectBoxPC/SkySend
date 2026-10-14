@@ -4,3 +4,4 @@ packages:
   - "docs"
   - "workers/*"
   - "website"
+  - "e2e"

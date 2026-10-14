@@ -63,6 +63,12 @@ export function createPasswordRoute(lockout: PasswordLockout) {
       return c.json({ error: "Upload has expired" }, 410);
     }
 
+    // A share whose downloads are used up is gone, like the info and the download say, so its
+    // metadata does not go out until the next cleanup removes it.
+    if (upload.downloadCount >= upload.maxDownloads) {
+      return c.json({ error: "Download limit reached" }, 410);
+    }
+
     // Constant-time comparison of the provided auth token
     let providedToken: Uint8Array;
     try {
