@@ -592,6 +592,15 @@ function screenshotAtHalf(page, name) {
     .catch((err) => `none: ${String(err.message ?? err).split("\n")[0]}`);
 }
 
+/**
+ * The screenshot once the transfer ended. A short transfer can pass half between two polls,
+ * so after 2 s it gives up instead of waiting for the timeout of half an hour.
+ */
+function finishedShot(shot) {
+  const late = new Promise((resolve) => setTimeout(resolve, 2000));
+  return Promise.race([shot, late.then(() => "none: the transfer passed half between two polls")]);
+}
+
 /** Objects and multipart uploads this run left in a real bucket, then removed (--s3 env). */
 async function realBucketCleanup(s3env, dataDir, since) {
   const s3 = createRequire(join(ROOT, "apps", "server", "package.json"))("@aws-sdk/client-s3");
@@ -775,7 +784,7 @@ async function singleTransfer(browser, source, result, sampler, counters) {
     ...shownSummary(shownUpload, uploadStart, uploadEnd, SIZE / MIB / ((uploadEnd - uploadStart) / 1000)),
     average: shownAverage,
   };
-  result.upload.screenshot = await uploadShot;
+  result.upload.screenshot = await finishedShot(uploadShot);
   result.upload.progress = progress.map((e) => [e.t, e.loaded]);
   result.upload.wireBytes = { a: counters.a.up, b: counters.b?.up };
   // TCP connections opened so far, to the server and to the bucket.
@@ -852,7 +861,7 @@ async function singleTransfer(browser, source, result, sampler, counters) {
         ),
         average: shownDownloadAverage,
       },
-      screenshot: await downloadShot,
+      screenshot: await finishedShot(downloadShot),
       cost: cost(sampler.samples, downloadStart, downloadEnd),
     };
     if (!opts["no-verify"]) {
@@ -1156,7 +1165,9 @@ async function main() {
   } finally {
     sampler.stop();
     result.samples = sampler.samples;
-    result.serverLog = server.log.filter((line) => !/^<--|^-->/.test(line)).slice(-50);
+    // Drops the request log lines. startsWith, since CodeQL reads /^-->/ as HTML filtering.
+    const notRequest = (line) => !line.startsWith("<--") && !line.startsWith("-->");
+    result.serverLog = server.log.filter(notRequest).slice(-50);
     await browser.close().catch(() => {});
     // Aborts run after the socket closed, so the cleanup gives them a moment first.
     if (realBucket) result.s3Leftovers = await cleanBucket();
