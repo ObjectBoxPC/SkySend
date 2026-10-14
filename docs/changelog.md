@@ -17,6 +17,7 @@ All notable changes to SkySend are documented here.
 - **server**: A failed or abandoned upload to S3 storage no longer leaves its uploaded parts in the bucket, where the provider kept billing them.
 - **server**: Uploads to S3 storage that need more than 10,000 parts no longer fail, since the part size grows with the size of the upload.
 - **server**: Downloads from S3 storage are no longer blocked by the browser when the provider puts the bucket into the host name, like Cloudflare R2 and Hetzner set up as the docs show.
+- **server**: An unknown address under `/api` answers with a 404 instead of the page of the app.
 - **web**: Uploads in chunks, the fallback when a WebSocket cannot connect, no longer fail in a Chrome incognito window once a file passes 1 to 2 GB.
 - **web**: The technical info of a download no longer claims on a phone, a tablet or a browser other than Firefox that the developer tools are open.
 - **web**: Several files that add up to more than 4 GB arrive as a zip that unzip tools can open, where they reported it as damaged before.
@@ -30,6 +31,11 @@ All notable changes to SkySend are documented here.
 
 - **server**: Opening an upload over WebSocket counts against the rate limit like any other upload, and a connection that does not start its upload within 30 seconds is closed. Thanks @barnessomer ([GHSA-rmc2-p8pp-4vmh](https://github.com/Skyfay/SkySend/security/advisories/GHSA-rmc2-p8pp-4vmh))
 - **server**: All uploads over WebSocket together hold at most `FILE_UPLOAD_WS_MEMORY_LIMIT` in memory and slow down once it is reached, so many uploads at once can no longer run the server out of memory. Thanks @barnessomer ([GHSA-rmc2-p8pp-4vmh](https://github.com/Skyfay/SkySend/security/advisories/GHSA-rmc2-p8pp-4vmh))
+- **server**: The metadata of an upload can only be stored once, also when two requests arrive at the same time.
+- **server**: With AWS S3, the content security policy allows downloads from the instance's own bucket only, instead of from every bucket in its region.
+- **server**: The password check of a share whose downloads are used up answers that the share is gone, instead of handing out its encrypted metadata until the next cleanup.
+- **web**: A download shows and saves the file under a cleaned name, so a sender can no longer disguise its type with characters that reverse the text, like an exe that shows as a pdf.
+- **web**: Downloads reach the browser as plain files that it never opens as a page of the instance, whatever type the sender named.
 
 ### 🎨 Improvements
 
@@ -66,6 +72,8 @@ All notable changes to SkySend are documented here.
 - **docs**: The S3 guide now explains how to set a lifecycle rule that removes incomplete multipart uploads.
 - **docs**: The rate limiting guide explains that people behind one address share one count and when to raise `RATE_LIMIT_MAX`.
 - **docs**: The S3 guide names the endpoint of a Cloudflare R2 bucket in the EU jurisdiction.
+- **docs**: The rate limiting guide says which address of `X-Forwarded-For` counts and what to do behind a CDN.
+- **docs**: The API reference lists the answers of the password check and of an unknown address under `/api` as the server gives them.
 
 ### 🧪 Tests
 
@@ -73,12 +81,14 @@ All notable changes to SkySend are documented here.
 - **server**: Unit tests cover the memory limit of S3 uploads and the serving of the files of the app.
 - **server**: Unit tests cover the rate limit of uploads over WebSocket, their shared memory budget and the timeout before their start.
 - **server**: Unit tests check that the content security policy allows the presigned downloads of R2, Hetzner, MinIO and AWS S3 as the AWS SDK builds them.
+- **server**: Unit tests cover metadata sent twice at once, the password check of a used-up share and the content security policy of an AWS S3 bucket.
 - **web**: Unit tests feed every block of a note the markup an attacker would try and check that nothing of it can run, load or restyle the page.
 - **web**: Unit tests read the zip of several files back with another zip reader and check its records past 4 GB.
 - **web**: Unit tests cover the check of the room in browser storage before a download goes there.
 - **web**: Unit tests check that the speed a transfer shows stays steady when its data arrives in bursts.
 - **web**: Unit tests cover how the download service worker gets its updates and which worker takes a download.
 - **web**: A unit test checks that a download page shows the size of the file and not of its ciphertext.
+- **web**: Unit tests check that a download is saved under a cleaned name as a plain file and that the download service worker forbids the browser to run what it hands over.
 - **crypto**: Frozen values pin the auth and owner token derivation, the password box key is checked to be non-extractable, and the base64url decoder is checked to refuse the standard alphabet.
 - **crypto**: Tests check the record layout of encrypted files against the format itself for every way the input can be cut into chunks.
 - **infra**: End-to-end tests share files and notes and send to file requests in Chromium, Firefox and WebKit, directly and behind Caddy and Nginx with HTTPS and HTTP/2, then open them on the other side. They check that keys, filenames, passwords and contents never reach the server and that uploads and downloads take the path they should.
@@ -91,6 +101,8 @@ All notable changes to SkySend are documented here.
 - **infra**: An end-to-end test downloads a file through the browser's private storage, the way Safari now does, in Firefox with Service Workers blocked.
 - **infra**: End-to-end tests check that a folder keeps its subfolders in the zip and that names too long for the server stop an upload before it starts.
 - **infra**: An end-to-end test starts a download in Firefox after the browser stopped the idle download service worker.
+- **infra**: A test fails when a file in the repository holds an invisible character that changes how code reads, like a right-to-left override.
+- **infra**: An end-to-end test checks that an unknown address under `/api` answers with a 404 in JSON.
 
 ### 🔧 CI/CD
 
