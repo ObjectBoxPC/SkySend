@@ -74,9 +74,11 @@ Client IP addresses are HMAC-SHA256 hashed with an ephemeral in-memory key befor
 
 SkySend determines the client IP using:
 
-1. `X-Forwarded-For` header (if `TRUST_PROXY=true`)
+1. The last address in the `X-Forwarded-For` header, the one your reverse proxy added (if `TRUST_PROXY=true`)
 2. `X-Real-IP` header (if `TRUST_PROXY=true`)
 3. Direct socket address (fallback)
+
+The addresses before the last one come from the client and are never trusted. Behind two proxies, like a CDN in front of your reverse proxy, the last address is the one of the CDN, so every visitor shares its count. Have your reverse proxy put the client address the CDN reports into `X-Forwarded-For` instead.
 
 ::: warning
 Only enable `TRUST_PROXY=true` when running behind a trusted reverse proxy. Otherwise, clients can spoof their IP to bypass rate limits and quotas.

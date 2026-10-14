@@ -73,4 +73,28 @@ describe("DownloadCard", () => {
     );
     expect(sizeShown()).toBe("22 B");
   });
+
+  it("shows every name the sender put into an archive cleaned", () => {
+    render(
+      <DownloadCard
+        info={info(calculateEncryptedSize(SIZE))}
+        metadata={{
+          type: "archive",
+          files: [
+            { name: "invoice‮fdp.exe", size: 1 },
+            { name: "../../etc/passwd", size: 2 },
+          ],
+          totalSize: 3,
+        }}
+        phase="idle"
+        progress={0}
+        error={null}
+        onDownload={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    expect(screen.getByText("invoicefdp.exe")).toBeTruthy();
+    expect(screen.getByText("_.._etc_passwd")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("‮");
+  });
 });

@@ -433,6 +433,29 @@ describe("routes", () => {
       expect(upload!.nonce).toBeTruthy();
     });
 
+    it("stores the metadata of only one of two requests that arrive at the same time", async () => {
+      const ownerToken = fakeBase64urlToken();
+      insertTestUpload(dbCtx.db, { ownerToken });
+      const app = new Hono();
+      app.route("/api/meta", metaRoute);
+      const post = (text: string) =>
+        app.request(`/api/meta/${TEST_UUID}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Owner-Token": ownerToken },
+          body: JSON.stringify({
+            encryptedMeta: Buffer.from(text).toString("base64"),
+            nonce: Buffer.from("test-nonce").toString("base64"),
+          }),
+        });
+
+      const [first, second] = await Promise.all([post("first"), post("second")]);
+
+      expect([first.status, second.status].sort()).toEqual([200, 409]);
+      const upload = await dbCtx.db.query.uploads.findFirst({ where: eq(uploads.id, TEST_UUID) });
+      const winner = first.status === 200 ? "first" : "second";
+      expect(Buffer.from(upload!.encryptedMeta!).toString()).toBe(winner);
+    });
+
     it("should reject without owner token", async () => {
       insertTestUpload(dbCtx.db);
 

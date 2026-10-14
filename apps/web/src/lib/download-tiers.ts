@@ -307,7 +307,9 @@ export async function saveDecryptedDownload(options: SaveDownloadOptions): Promi
       chunks.push(value);
     }
     stopStallTimer();
-    const blob = new Blob(chunks as BlobPart[], { type: mimeType });
+    // Never the sender's type: a blob: URL belongs to this origin, and a browser that ignores
+    // the download attribute would open a text/html one as a page of the instance.
+    const blob = new Blob(chunks as BlobPart[], { type: "application/octet-stream" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;

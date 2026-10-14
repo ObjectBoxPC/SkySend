@@ -231,6 +231,9 @@ async function handleDownload(config, downloadId, streamDone) {
     "Content-Type": /^[a-z][\w.+-]*\/[\w.+-]+$/i.test(mimeType || "") ? mimeType : "application/octet-stream",
     // The type is the uploader's word, so the browser must not guess a more dangerous one.
     "X-Content-Type-Options": "nosniff",
+    // A response built here carries no CSP of the server. Should a browser ever show it
+    // instead of saving it, nothing in it may run or load.
+    "Content-Security-Policy": "default-src 'none'; sandbox",
   });
 
   // Content-Length of the DECRYPTED output. Critical for Safari:
