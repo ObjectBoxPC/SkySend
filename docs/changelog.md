@@ -18,6 +18,7 @@ All notable changes to SkySend are documented here.
 - **server**: Uploads to S3 storage that need more than 10,000 parts no longer fail, since the part size grows with the size of the upload.
 - **server**: Downloads from S3 storage are no longer blocked by the browser when the provider puts the bucket into the host name, like Cloudflare R2 and Hetzner set up as the docs show.
 - **server**: An unknown address under `/api` answers with a 404 instead of the page of the app.
+- **server**: A chunk the server refuses as too large no longer leaves its file behind in the data directory now and then.
 - **web**: Uploads in chunks, the fallback when a WebSocket cannot connect, no longer fail in a Chrome incognito window once a file passes 1 to 2 GB.
 - **web**: The technical info of a download no longer claims on a phone, a tablet or a browser other than Firefox that the developer tools are open.
 - **web**: Several files that add up to more than 4 GB arrive as a zip that unzip tools can open, where they reported it as damaged before.
@@ -82,6 +83,7 @@ All notable changes to SkySend are documented here.
 - **server**: Unit tests cover the rate limit of uploads over WebSocket, their shared memory budget and the timeout before their start.
 - **server**: Unit tests check that the content security policy allows the presigned downloads of R2, Hetzner, MinIO and AWS S3 as the AWS SDK builds them.
 - **server**: Unit tests cover metadata sent twice at once, the password check of a used-up share and the content security policy of an AWS S3 bucket.
+- **server**: A unit test checks that a refused chunk leaves no file behind, also on a disk that opens files slowly.
 - **web**: Unit tests feed every block of a note the markup an attacker would try and check that nothing of it can run, load or restyle the page.
 - **web**: Unit tests read the zip of several files back with another zip reader and check its records past 4 GB.
 - **web**: Unit tests cover the check of the room in browser storage before a download goes there.
@@ -109,6 +111,8 @@ All notable changes to SkySend are documented here.
 - **infra**: Pull requests run the end-to-end tests in one job per browser, each starting only the services its tests need, and keep the screenshots, videos and traces of a failed job for seven days.
 - **infra**: A job of its own sends a file of 5 GiB up through Nginx with TLS and HTTP/2 and down again in Chromium, and compares it byte for byte.
 - **infra**: A pull request into dev that changes nothing the end-to-end tests cover, like one for the website alone, skips them, and Validate can also be started by hand.
+- **infra**: Pull requests into dev build the Docker image and the CLI binaries whenever their changes reach them, and pull requests into main always build both, without waiting for an approval.
+- **infra**: The CLI binaries are built with a fixed version of Bun instead of the newest one, whose lookup failed the Windows build of a release.
 
 ### 🐳 Docker
 
