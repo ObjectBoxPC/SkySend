@@ -379,7 +379,7 @@ describe("requestOutlived", () => {
 
 describe("sanitizeFilename", () => {
   it("drops bidirectional overrides that disguise an extension", () => {
-    expect(sanitizeFilename("invoice‮fdp.exe")).toBe("invoicefdp.exe");
+    expect(sanitizeFilename("invoice\u202Efdp.exe")).toBe("invoicefdp.exe");
   });
 
   it("drops control characters and path separators", () => {
@@ -435,7 +435,7 @@ describe("sanitizeFilename", () => {
 
   it("never returns an empty name", () => {
     expect(sanitizeFilename("")).toBe("file");
-    expect(sanitizeFilename("‮")).toBe("file");
+    expect(sanitizeFilename("\u202E")).toBe("file");
     expect(sanitizeFilename("..")).toBe("file");
   });
 

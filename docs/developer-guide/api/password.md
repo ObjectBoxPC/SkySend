@@ -62,11 +62,17 @@ The encrypted metadata of a password-protected upload comes only from here, sinc
 }
 ```
 
-**410 Gone:**
+**410 Gone** (expired, or every download used up, the same as `GET /api/info/:id` answers):
 
 ```json
 {
-  "error": "Upload expired"
+  "error": "Upload has expired"
+}
+```
+
+```json
+{
+  "error": "Download limit reached"
 }
 ```
 

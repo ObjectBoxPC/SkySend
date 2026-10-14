@@ -22,10 +22,11 @@ export function bucketConnectSources(
     return sources;
   }
   if (config.S3_REGION) {
-    return [
-      `https://s3.${config.S3_REGION}.amazonaws.com`,
-      `https://*.s3.${config.S3_REGION}.amazonaws.com`,
-    ];
+    const regional = `https://s3.${config.S3_REGION}.amazonaws.com`;
+    // The bucket of this instance only. A wildcard would allow every bucket of the region,
+    // so a script that got into the page could send what it read to a bucket of its own.
+    if (config.S3_FORCE_PATH_STYLE || !config.S3_BUCKET) return [regional];
+    return [regional, `https://${config.S3_BUCKET}.s3.${config.S3_REGION}.amazonaws.com`];
   }
   return [];
 }

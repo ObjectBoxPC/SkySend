@@ -17,6 +17,7 @@ import { saveDecryptedDownload, type DownloadDebugInfo } from "@/lib/download-ti
 import { isSafari, isFirefox, isDevToolsOpen, SAFARI_BIG_SIZE, formatBytes } from "@/lib/utils";
 import { opfsFits } from "@/lib/opfs-file";
 import { createSpeedMeter } from "@/lib/speed";
+import { sanitizeFilename } from "@/lib/file-request";
 
 export type DownloadPhase =
   | "idle"
@@ -329,7 +330,9 @@ export function useDownload() {
         let filename = "download";
         let mimeType = "application/octet-stream";
         if (metadata?.type === "single") {
-          filename = metadata.name;
+          // The name is the sender's word, so it is cleaned like in an inbox: no control
+          // characters that turn "invoice\u202Efdp.exe" into "invoiceexe.pdf", no path.
+          filename = sanitizeFilename(metadata.name);
           mimeType = metadata.mimeType;
         } else if (metadata?.type === "archive") {
           filename = "archive.zip";

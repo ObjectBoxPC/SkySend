@@ -53,6 +53,7 @@ describe("bucketConnectSources", () => {
     },
     { name: "MinIO on a port", S3_ENDPOINT: "https://minio.example.com:9000", S3_REGION: "us-east-1" },
     { name: "AWS S3", S3_ENDPOINT: undefined, S3_REGION: "eu-central-1" },
+    { name: "AWS S3 in us-east-1", S3_ENDPOINT: undefined, S3_REGION: "us-east-1" },
   ];
 
   for (const provider of providers) {
@@ -79,6 +80,28 @@ describe("bucketConnectSources", () => {
     };
     const origin = await presignedOrigin(config);
     expect(allows(bucketConnectSources(config), origin), origin).toBe(true);
+  });
+
+  it("allows an AWS bucket with dots in its name, which the SDK keeps in the path", async () => {
+    const config = {
+      S3_ENDPOINT: undefined,
+      S3_REGION: "eu-central-1",
+      S3_BUCKET: "uploads.skysend.example",
+      S3_FORCE_PATH_STYLE: false,
+    };
+    const origin = await presignedOrigin(config);
+    expect(allows(bucketConnectSources(config), origin), origin).toBe(true);
+  });
+
+  it("allows no other bucket of the AWS region than its own", () => {
+    const sources = bucketConnectSources({
+      S3_ENDPOINT: undefined,
+      S3_REGION: "eu-central-1",
+      S3_BUCKET: "skysend-uploads",
+      S3_FORCE_PATH_STYLE: false,
+    });
+    expect(allows(sources, "https://skysend-uploads.s3.eu-central-1.amazonaws.com")).toBe(true);
+    expect(allows(sources, "https://someone-else.s3.eu-central-1.amazonaws.com")).toBe(false);
   });
 
   it("adds no host of the bucket when path style keeps it in the path", () => {

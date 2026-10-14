@@ -179,7 +179,7 @@ describe("parseTemplate", () => {
       blocks: [
         {
           type: "password",
-          entries: [{ label: "Bank‮gnp.exe\u0007 PIN\n\n\tnow", value: "" }],
+          entries: [{ label: "Bank\u202Egnp.exe\u0007 PIN\n\n\tnow", value: "" }],
         },
         { type: "code", title: "ㅤㅤx", language: "auto", code: "" },
         { type: "text", format: "plain", text: "", label: `Z${"́".repeat(30)}` },

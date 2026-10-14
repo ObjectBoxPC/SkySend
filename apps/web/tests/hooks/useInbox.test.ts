@@ -366,7 +366,7 @@ describe("downloadName", () => {
   });
 
   it("cleans the name a sender chose", () => {
-    expect(downloadName(entry("a‮txt.exe")).filename).toBe("atxt.exe");
+    expect(downloadName(entry("a\u202Etxt.exe")).filename).toBe("atxt.exe");
   });
 
   it("saves an archive as a zip", () => {

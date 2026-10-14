@@ -5,6 +5,7 @@ import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn, formatBytes, formatTimeRemaining } from "@/lib/utils";
 import { fileBadge } from "@/lib/file-badge";
+import { sanitizeFilename } from "@/lib/file-request";
 import type { UploadInfo } from "@/lib/api";
 import { calculatePlaintextSize, type FileMetadata } from "@skysend/crypto";
 import type { DownloadPhase } from "@/hooks/useDownload";
@@ -31,7 +32,9 @@ interface DownloadCardProps {
   onCancel?: () => void;
 }
 
-function FileRow({ name, size }: { name: string; size: number }) {
+/** A name from the sender's metadata, shown cleaned like in an inbox, the badge included. */
+function FileRow({ name: sent, size }: { name: string; size: number }) {
+  const name = sanitizeFilename(sent);
   const badge = fileBadge(name);
   return (
     <li className="flex items-center gap-3 rounded-[14px] bg-card py-2 pl-2.5 pr-3 shadow-chip">

@@ -433,6 +433,29 @@ describe("routes", () => {
       expect(upload!.nonce).toBeTruthy();
     });
 
+    it("stores the metadata of only one of two requests that arrive at the same time", async () => {
+      const ownerToken = fakeBase64urlToken();
+      insertTestUpload(dbCtx.db, { ownerToken });
+      const app = new Hono();
+      app.route("/api/meta", metaRoute);
+      const post = (text: string) =>
+        app.request(`/api/meta/${TEST_UUID}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Owner-Token": ownerToken },
+          body: JSON.stringify({
+            encryptedMeta: Buffer.from(text).toString("base64"),
+            nonce: Buffer.from("test-nonce").toString("base64"),
+          }),
+        });
+
+      const [first, second] = await Promise.all([post("first"), post("second")]);
+
+      expect([first.status, second.status].sort()).toEqual([200, 409]);
+      const upload = await dbCtx.db.query.uploads.findFirst({ where: eq(uploads.id, TEST_UUID) });
+      const winner = first.status === 200 ? "first" : "second";
+      expect(Buffer.from(upload!.encryptedMeta!).toString()).toBe(winner);
+    });
+
     it("should reject without owner token", async () => {
       insertTestUpload(dbCtx.db);
 
@@ -662,6 +685,32 @@ describe("routes", () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.ok).toBe(true);
+    });
+
+    it("answers a share whose downloads are used up like the info does, without its metadata", async () => {
+      const authToken = fakeBase64urlToken();
+      insertTestUpload(dbCtx.db, {
+        authToken,
+        hasPassword: true,
+        passwordSalt: Buffer.from(crypto.getRandomValues(new Uint8Array(16))),
+        passwordAlgo: "argon2id",
+        encryptedMeta: Buffer.from("encrypted-metadata"),
+        nonce: Buffer.from("test-nonce"),
+        downloadCount: 1,
+        maxDownloads: 1,
+      });
+
+      const app = new Hono();
+      app.route("/api/password", createPasswordRoute(mockLockout));
+
+      const res = await app.request(`/api/password/${TEST_UUID}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ authToken }),
+      });
+
+      expect(res.status).toBe(410);
+      expect(await res.text()).not.toContain(Buffer.from("encrypted-metadata").toString("base64"));
     });
 
     it("should reject wrong auth token", async () => {

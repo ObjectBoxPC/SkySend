@@ -4,7 +4,7 @@ import { bodyLimit } from "hono/body-limit";
 import { MAX_ENCRYPTED_METADATA_BYTES } from "@skysend/crypto";
 import { getDb } from "../db/index.js";
 import { uploads } from "../db/schema.js";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { ownerMiddleware } from "../middleware/auth.js";
 import type { Upload } from "../db/schema.js";
 
@@ -66,14 +66,20 @@ metaRoute.post("/:id", ownerMiddleware, bodyLimit({ maxSize: 256 * 1024, onError
     return c.json({ error: "Invalid nonce encoding" }, 400);
   }
 
+  // Only while none is stored: the check above ran before the body was read, so a second
+  // request could have stored its metadata meanwhile.
   const db = getDb();
-  db.update(uploads)
+  const stored = db
+    .update(uploads)
     .set({
       encryptedMeta: metaBuffer,
       nonce: nonceBuffer,
     })
-    .where(eq(uploads.id, upload.id))
+    .where(and(eq(uploads.id, upload.id), isNull(uploads.encryptedMeta)))
     .run();
+  if (stored.changes === 0) {
+    return c.json({ error: "Metadata already set" }, 409);
+  }
 
   return c.json({ ok: true });
 });

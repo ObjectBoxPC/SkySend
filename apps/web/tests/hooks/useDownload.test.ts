@@ -173,6 +173,48 @@ describe("useDownload", () => {
     expect(result.current.progress).toBe(100);
   });
 
+  it("saves under a cleaned name and as a plain download, whatever the metadata claims", async () => {
+    const apiMod = await import("../../src/lib/api.js");
+    const cryptoMod = await import("@skysend/crypto");
+    vi.mocked(apiMod.fetchInfo).mockResolvedValueOnce(makeUploadInfo());
+    // A sender who hides an exe behind a right-to-left override and names a type a browser
+    // would render as a page of the instance.
+    vi.mocked(cryptoMod.decryptMetadata).mockResolvedValueOnce({
+      type: "single",
+      name: "invoice\u202Efdp.exe",
+      size: 3,
+      mimeType: "text/html",
+    });
+    vi.mocked(apiMod.downloadFile).mockResolvedValueOnce({
+      stream: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1, 2, 3]));
+          controller.close();
+        },
+      }),
+      size: 3,
+      fileCount: 1,
+    });
+    const saved: string[] = [];
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(function (this: HTMLAnchorElement) {
+        saved.push(this.download);
+      });
+
+    const { useDownload } = await import("../../src/hooks/useDownload.js");
+    const { result } = renderHook(() => useDownload());
+    await act(async () => {
+      await result.current.download("f-1", "secret64");
+    });
+    click.mockRestore();
+
+    expect(result.current.phase).toBe("done");
+    expect(saved).toEqual(["invoicefdp.exe"]);
+    const blob = vi.mocked(URL.createObjectURL).mock.calls[0]![0] as Blob;
+    expect(blob.type).toBe("application/octet-stream");
+  });
+
   it("download() mit korrektem Passwort → phase='done'", async () => {
     const apiMod = await import("../../src/lib/api.js");
     vi.mocked(apiMod.fetchInfo).mockResolvedValueOnce(
