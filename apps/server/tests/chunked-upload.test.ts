@@ -10,6 +10,20 @@ vi.mock("../src/lib/config.js", () => ({
   loadConfig: vi.fn(),
 }));
 
+/** Set by a test to make file streams open late, the way they do on a slow disk. */
+const openDelay = vi.hoisted(() => ({ ms: 0 }));
+
+vi.mock("node:fs", async (importOriginal) => {
+  const fs = await importOriginal<typeof import("node:fs")>();
+  const open = fs.open as (...args: unknown[]) => void;
+  const slowFs = { ...fs, open: (...args: unknown[]) => setTimeout(() => open(...args), openDelay.ms) };
+  return {
+    ...fs,
+    createWriteStream: (path: string, options?: object) =>
+      fs.createWriteStream(path, openDelay.ms > 0 ? { ...options, fs: slowFs } : options),
+  };
+});
+
 import { getConfig, type Config } from "../src/lib/config.js";
 import { createChunkedUploads, MIN_PROGRESS_BYTES } from "../src/lib/chunked-upload.js";
 
@@ -132,6 +146,32 @@ describe("chunked upload sessions", () => {
     expect(await res.json()).toEqual({ error: "Upload session not found or expired" });
     expect(readdirSync(chunkDir)).toEqual([]);
     expect(onAbandon).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps no file of a chunk it refuses as too large, also when the file opens late", async () => {
+    // pipeline() gave up before a file stream that was still opening had made its file, so the
+    // file came after it was removed. A slow disk in CI did that now and then.
+    openDelay.ms = 50;
+    try {
+      const { sessions, post } = setup();
+      const id = await sessions.open(1024, { owner: "a" });
+      let pieces = 0;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (pieces++ === 3) controller.close();
+          else controller.enqueue(new Uint8Array(512));
+        },
+      });
+
+      const res = await post(id, 0, body);
+
+      expect(res.status).toBe(413);
+      // Longer than the open takes, so a file made late would be there by now.
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(readdirSync(chunkDir)).toEqual([]);
+    } finally {
+      openDelay.ms = 0;
+    }
   });
 
   it("drops the session when a chunk body breaks off", async () => {

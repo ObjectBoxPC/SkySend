@@ -243,6 +243,8 @@ export function createChunkedUploads<M>(
       let tooLarge: string | null = null;
       /** Whether the session took over the chunk file. */
       let kept = false;
+      /** Settles once the chunk file is closed, which the cleanup waits for. */
+      let fileClosed: Promise<void> = Promise.resolve();
       try {
         // Record when the first chunk arrives (for speed limiting)
         if (session.firstChunkAt === 0) {
@@ -256,6 +258,8 @@ export function createChunkedUploads<M>(
         // queued behind another write. Streaming it into a file reads it at
         // once without holding it in memory. The limits are checked per read,
         // so an oversized body is cut off instead of being read in full.
+        const file = createWriteStream(chunkPath);
+        fileClosed = new Promise((resolve) => file.once("close", () => resolve()));
         try {
           await pipeline(
             Readable.fromWeb(body as NodeReadableStream<Uint8Array>),
@@ -272,7 +276,7 @@ export function createChunkedUploads<M>(
                 yield piece;
               }
             },
-            createWriteStream(chunkPath),
+            file,
           );
         } catch (err) {
           if (tooLarge) return c.json({ error: tooLarge }, 413);
@@ -332,6 +336,9 @@ export function createChunkedUploads<M>(
         session.receivingChunks.delete(chunkIndex);
         if (!kept) {
           session.bytesReceived -= received;
+          // pipeline() rejects without waiting for the file to close, and a file stream still
+          // opening creates its file only then. An rm that ran first left the file behind.
+          await fileClosed;
           await rm(chunkPath, { force: true });
         }
       }
