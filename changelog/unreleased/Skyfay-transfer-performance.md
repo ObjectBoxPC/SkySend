@@ -48,6 +48,7 @@
 
 - **docs**: The S3 guide now explains how to set a lifecycle rule that removes incomplete multipart uploads.
 - **docs**: The rate limiting guide explains that people behind one address share one count and when to raise `RATE_LIMIT_MAX`.
+- **docs**: The S3 guide names the endpoint of a Cloudflare R2 bucket in the EU jurisdiction.
 
 ### 🧪 Tests
 
