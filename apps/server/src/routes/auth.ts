@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { getCookie } from "hono/cookie";
 import {
   discovery,
+  allowInsecureRequests,
   buildAuthorizationUrl,
   authorizationCodeGrant,
   buildEndSessionUrl,
@@ -52,10 +53,16 @@ export function createAuthRoute(config: Config, adapter: OidcAdapterProfile): Ho
     if (cachedOidcConfig) return Promise.resolve(cachedOidcConfig);
     if (pendingDiscovery) return pendingDiscovery;
 
+    const discoveryOptions = config.OIDC_ALLOW_INSECURE_ISSUER
+      ? { execute: [allowInsecureRequests] }
+      : {};
+
     pendingDiscovery = discovery(
       new URL(config.OIDC_ISSUER!),
       config.OIDC_CLIENT_ID!,
       config.OIDC_CLIENT_SECRET!,
+      undefined,
+      discoveryOptions,
     ).then((cfg) => {
       cachedOidcConfig = cfg;
       pendingDiscovery = null;
