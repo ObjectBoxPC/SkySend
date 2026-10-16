@@ -241,6 +241,7 @@ When `OIDC_ISSUER`, `OIDC_CLIENT_ID`, and `OIDC_CLIENT_SECRET` are all set, OIDC
 | :--- | :---: | :--- | :--- |
 | `OIDC_PROVIDER` | ❌ | `generic` | Provider preset. One of `generic`, `pocketid`, `authentik`, `keycloak`. Controls which token claims are used for the display name. |
 | `OIDC_ISSUER` | ⚠️ | - | Issuer URL of your OIDC provider. Required to activate OIDC. All endpoints are discovered automatically from this URL. |
+| `OIDC_ALLOW_INSECURE_ISSUER` | ❌ | `false` | (Local testing only) Whether to allow an insecure (non-HTTPS) issuer URL. |
 | `OIDC_CLIENT_ID` | ⚠️ | - | Client ID of the application registered at your provider. |
 | `OIDC_CLIENT_SECRET` | ⚠️ | - | Client secret of the application registered at your provider. |
 | `OIDC_SESSION_SECRET` | ❌ | auto | Secret used to sign session JWT cookies. If not set, a random 48-byte secret is generated at startup - sessions will be invalidated on every server restart. Set this to a fixed value (minimum 32 characters, generate with `openssl rand -base64 48`) to persist sessions across restarts. |
